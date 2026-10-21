@@ -22,6 +22,9 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+[project.scripts]
+coontie = "coontie.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

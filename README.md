@@ -39,12 +39,48 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/guardrails.py` | The failures that get missed, as countable alerts with citations: held lots, expiring product, unjustified adjustments, the disconnect clock, stale locations |
 | `src/coontie/drift.py` | Comparison of our record against the state's copy, with every difference classified |
 | `src/coontie/store.py` | Append-only, hash-chained event ledger with native CSV export and tamper detection |
+| `src/coontie/workspace.py` | The SQLite workspace: facility, rooms, products, lots, and the ledger beside them |
+| `src/coontie/importer.py` | Forgiving CSV import from an incumbent, with a per-row report and idempotent product matching |
+| `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
+| `src/coontie/forms.py` | The DH5058 inventory list, with the form's exact columns and enumerations |
+| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `verify` |
+| `docs/forms/dh5058.md` | The form's field list and what Coontie does with each field |
 | `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
 | `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
 | `docs/requirements/` | Requirement matrices for 64-4.221 and 64-4.222, plus the generated DH5059 event catalog |
 | `docs/sources.md` | Every primary document, where it was fetched, and what is deliberately not used |
 
-## Quick start
+## Use it: first run into a working record
+
+```bash
+export PYTHONPATH=src
+
+# 1. the MMTC and its rooms
+python3 -m coontie.cli init --db ws.sqlite3 \
+  --name "Nature's Grace FL, LLC" --license MMTC-2026-0030 \
+  --room inventory:INV1:01 --room inventory:INV2:02 --room grow:G1:03
+
+# 2. bring in whatever the previous system exported (dry run first, always)
+python3 -m coontie.cli --db ws.sqlite3 import --csv export.csv --dry-run
+python3 -m coontie.cli --db ws.sqlite3 import --csv export.csv
+
+# 3. look at what you hold
+python3 -m coontie.cli --db ws.sqlite3 inventory
+
+# 4. produce the DH5058 inventory list for the integration plan
+python3 -m coontie.cli --db ws.sqlite3 export dh5058 --out dh5058.csv
+
+# 5. prove the record was not tampered with
+python3 -m coontie.cli --db ws.sqlite3 verify
+```
+
+The import is forgiving about column names (`Item Name`, `Product Name` and
+`THC (mg)`, `Tetrahydrocannabinol (THC) Weight` both land correctly), strict about
+values (a bad product type is reported with the form's own options), and idempotent
+(re-importing reuses products by unique product ID instead of duplicating the
+catalogue). Rows that fail are skipped and listed; nothing aborts the batch.
+
+## Develop
 
 ```bash
 # no dependencies beyond the standard library

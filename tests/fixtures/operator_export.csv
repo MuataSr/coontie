@@ -1,0 +1,10 @@
+Item Name,Category,Route,Strain,Brand,THC (mg),CBD (mg),Net Weight,SKU,On Hand,UOM,Location
+Blue Dream 3.5g Flower,flower,smoke,Blue Dream,Nature's Grace,88.5,1.2,3.5,,120,g,INV1
+Blue Dream 3.5g Flower,flower,smoke,Blue Dream,Nature's Grace,88.5,1.2,3.5,,60,g,INV1
+Blue Dream Pre-Roll 5pk,pre-roll,smoke,Blue Dream,Nature's Grace,175,0,5,,40,units,INV1
+Nightshade Gummies 10pk,gummies,edible,Nightshade,Nature's Grace,100,100,50,,85,units,INV1
+Nightshade Gummies 10pk,gummies,edible,Nightshade,Nature's Grace,100,100,50,,25,units,INV2
+Relief Salve 2oz,topical,topical,Nightshade,Nature's Grace,0,250,56.7,,30,units,INV1
+Unmapped Mystery Item,mystery,oral,,,10,0,1,,5,units,INV1
+Broken Row,flower,smoke,Blue Dream,Nature's Grace,not-a-number,0,3.5,,10,g,INV1
+Vape Cart .5g,vape,inhalation,Silver Haze,Nature's Grace,350,0,0.5,,200,units,INV1

@@ -155,7 +155,7 @@ lives with the operator. Export is a first-class action, not a feature flag.
 | Event catalog | 33 DH5059 records with fields and timing | built |
 | Ledger | append-only, hash-chained, native CSV | built |
 | Domain model | the entities the catalog forces | built |
-| First run | guided setup plus incumbent import | to build |
+| First run | guided setup plus incumbent import | **built (S1)**: CLI first run, CSV import, DH5058 export |
 | Corrections | amend with cause and justification drafting | to build |
 | Drift | comparison against the state record | skeleton: compare and classify, no import or UI |
 | Guardrails | hold, expiry, adjustment, disconnect clock | skeleton: alert engine with citations, no UI |
@@ -171,7 +171,7 @@ gate is green.
 
 | # | Increment | Gate |
 |---|---|---|
-| S1 | First run plus import plus DH5058 export | An operator's export becomes a record, and the inventory list is produced, with no manual SQL |
+| S1 | First run plus import plus DH5058 export | **PASSED 2026-10-21**: `tests/test_s1_gate.py` runs the real CLI against an operator-style export and produces the 15-column form with 5 product types, 7 lots and a verifying ledger |
 | S2 | Corrections and justifications | A seeded set of wrong records is amended; every non-exempt case yields a justification draft and a deadline; the ledger shows both versions |
 | S3 | Guardrails and the disconnect clock | A simulated two-hour disconnection produces the notice draft and, on restore, the 24-hour outage CSV, unattended |
 | S4 | Drift view | Ten seeded drift cases are each detected, classified and resolved from the UI |
