@@ -14,6 +14,7 @@ No account, no server, no SQL. Everything is a file the operator owns.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -195,6 +196,110 @@ def cmd_verify(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_amend(args) -> int:
+    ws = _ws(args)
+    hold = True if args.hold else (False if args.release else None)
+    try:
+        amendment = ws.amend_lot(
+            args.lot,
+            new_quantity=args.quantity,
+            new_on_hold=hold,
+            cause=args.cause,
+            reason=args.reason,
+            actor=args.actor or "",
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    sign = "+" if amendment.delta > 0 else ""
+    print(f"{amendment.id}  {amendment.field}: {amendment.before} -> {amendment.after}  ({sign}{amendment.delta} {amendment.unit})  cause={amendment.cause}")
+    if amendment.exempt:
+        print(f"exempt from the written justification under Rule 64-4.222(12): cause {amendment.cause!r}")
+    else:
+        justification = ws.create_justification(amendment.id)
+        print(f"justification drafted: {justification.id}")
+        print(f"deadline: {justification.deadline.isoformat()} (12 hours after the adjustment)")
+        print(f"review: coontie justify {justification.id} --show")
+        print(f"send:   coontie justify {justification.id} --send")
+    ws.close()
+    return 0
+
+
+def cmd_justifications(args) -> int:
+    ws = _ws(args)
+    rows = ws.justifications(pending_only=args.pending)
+    if not rows:
+        print("no justifications yet" if not args.pending else "nothing pending: every non-exempt change is sent")
+        ws.close()
+        return 0
+    for j in rows:
+        print(f"{j.id}  {j.status:<12} deadline {j.deadline.isoformat()}  {j.subject[:70]}")
+    print(f"\n{len(rows)} justification(s)")
+    ws.close()
+    return 0
+
+
+def cmd_justify(args) -> int:
+    ws = _ws(args)
+    matches = [j for j in ws.justifications() if j.id.startswith(args.id)]
+    if not matches:
+        sys.exit(f"no justification matching {args.id!r}")
+    j = matches[0]
+    if args.send:
+        j = ws.mark_justification_sent(j.id)
+        print(f"marked sent to {j.recipient} at {j.sent_at.isoformat()} ({j.status})")
+    if args.show or not args.send:
+        print(f"subject: {j.subject}")
+        print(f"status:  {j.status}   deadline: {j.deadline.isoformat()}")
+        if j.sent_at:
+            print(f"sent:    {j.sent_at.isoformat()}")
+        print("-" * 72)
+        print(j.body)
+    ws.close()
+    return 0
+
+
+def cmd_journal(args) -> int:
+    ws = _ws(args)
+    entries = ws.journal(args.lot)
+    if not entries:
+        sys.exit(f"no history for {args.lot!r}")
+    for e in entries:
+        detail = e["detail"]
+        if e["kind"] == "amendment":
+            print(f"{e['when']}  amendment  {detail['field']}: {detail['before']} -> {detail['after']}  cause={detail['cause']}  justification={detail['justification']}")
+        else:
+            print(f"{e['when']}  {e['kind']:<22} {json.dumps(detail, sort_keys=True)[:110]}")
+    print(f"\n{len(entries)} entries, oldest first. The ledger hash chain covers the recorded events.")
+    ws.close()
+    return 0
+
+
+def cmd_alerts(args) -> int:
+    from . import guardrails
+
+    ws = _ws(args)
+    alerts = guardrails.collect(
+        lots=ws.lots(),
+        products=ws.products(),
+        adjustments=ws.adjustment_views(),
+        known_rooms={r.id for r in ws.rooms()},
+        records=ws.lots(),
+    )
+    if not alerts:
+        print("nothing to fix")
+        ws.close()
+        return 0
+    for a in alerts:
+        flag = "BLOCK" if a.blocks else "warn "
+        print(f"{flag}  {a.guard.value:<24} {a.message}")
+        print(f"        {a.citation}")
+        print(f"        action: {a.action}")
+    print()
+    print(", ".join(f"{v} {k}" for k, v in guardrails.counts(alerts).items()))
+    ws.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -254,6 +359,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     ver = _db(sub.add_parser("verify", help="check the ledger chain"))
     ver.set_defaults(func=cmd_verify)
+
+    amd = _db(sub.add_parser("amend", help="correct a lot without deleting the previous value"))
+    amd.add_argument("--lot", required=True)
+    amd.add_argument("--quantity", help="new quantity")
+    amd.add_argument("--hold", action="store_true", help="place the lot on hold")
+    amd.add_argument("--release", action="store_true", help="release a hold")
+    amd.add_argument("--cause", required=True, help="one of: " + ", ".join(__import__("coontie.amendments", fromlist=["ALL_CAUSES"]).ALL_CAUSES))
+    amd.add_argument("--reason", required=True)
+    amd.add_argument("--actor", help="who made the change")
+    amd.set_defaults(func=cmd_amend)
+
+    jst = _db(sub.add_parser("justifications", help="list correction notices and their deadlines"))
+    jst.add_argument("--pending", action="store_true", help="only those not yet sent")
+    jst.set_defaults(func=cmd_justifications)
+
+    jfy = _db(sub.add_parser("justify", help="show or send one justification"))
+    jfy.add_argument("id", help="justification id (prefix is enough)")
+    jfy.add_argument("--show", action="store_true")
+    jfy.add_argument("--send", action="store_true")
+    jfy.set_defaults(func=cmd_justify)
+
+    jrn = _db(sub.add_parser("journal", help="everything that happened to one record"))
+    jrn.add_argument("--lot", required=True)
+    jrn.set_defaults(func=cmd_journal)
+
+    alr = _db(sub.add_parser("alerts", help="the guardrails: what is wrong right now"))
+    alr.set_defaults(func=cmd_alerts)
     return p
 
 

@@ -18,8 +18,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from .compliance import DEPT_EMAIL
 
 from .store import Ledger
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .amendments import Amendment, Justification
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facilities (
@@ -79,6 +85,34 @@ CREATE TABLE IF NOT EXISTS import_batches (
     rows_failed   INTEGER NOT NULL,
     mapping       TEXT,
     created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS amendments (
+    id            TEXT PRIMARY KEY,
+    sequence      INTEGER NOT NULL,
+    target_kind   TEXT NOT NULL,
+    target_id     TEXT NOT NULL,
+    field         TEXT NOT NULL,
+    before_value  TEXT NOT NULL,
+    after_value   TEXT NOT NULL,
+    cause         TEXT NOT NULL,
+    reason        TEXT NOT NULL,
+    actor         TEXT NOT NULL DEFAULT '',
+    occurred_at   TEXT NOT NULL,
+    facility_id   TEXT NOT NULL DEFAULT '',
+    unit          TEXT NOT NULL DEFAULT '',
+    justification_id TEXT,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_amend_target ON amendments(target_id);
+CREATE TABLE IF NOT EXISTS justifications (
+    id            TEXT PRIMARY KEY,
+    amendment_id  TEXT NOT NULL,
+    subject       TEXT NOT NULL,
+    body          TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    deadline      TEXT NOT NULL,
+    sent_at       TEXT,
+    recipient     TEXT NOT NULL
 );
 """
 
@@ -251,6 +285,7 @@ class Workspace:
             "inventory_lot_create",
             {
                 "inventory": lot.product_id,
+                "lot_id": lot.id,
                 "weight_or_volume": str(lot.quantity),
                 "unit": lot.unit,
                 "room": lot.room_id,
@@ -258,6 +293,208 @@ class Workspace:
             datetime.now(timezone.utc),
         )
         return lot
+
+    # -- corrections (S2) ----------------------------------------------------
+
+    def amend_lot(
+        self,
+        lot_id: str,
+        *,
+        new_quantity: Decimal | str | None = None,
+        new_on_hold: bool | None = None,
+        cause: str,
+        reason: str,
+        actor: str = "",
+        when: datetime | None = None,
+    ) -> Amendment:
+        """Change a lot's quantity or hold status without losing the prior value."""
+        from .amendments import Amendment, new_id, validate_cause
+
+        validate_cause(cause)
+        if new_quantity is None and new_on_hold is None:
+            raise ValueError("nothing to amend: give a new quantity or a hold state")
+        row = self.conn.execute("SELECT * FROM lots WHERE id = ?", (lot_id,)).fetchone()
+        if not row:
+            raise ValueError(f"no lot {lot_id!r} in this workspace")
+        product = self.conn.execute("SELECT * FROM products WHERE id = ?", (row["product_id"],)).fetchone()
+        facility_id = product["facility_id"] if product else ""
+
+        when = when or datetime.now(timezone.utc)
+        sequence = int(
+            self.conn.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM amendments WHERE target_id = ?", (lot_id,)).fetchone()[0]
+        )
+
+        amendment_id = new_id("amd")
+        if new_quantity is not None:
+            field, before, after = "quantity", row["quantity"], str(Decimal(str(new_quantity)))
+            if Decimal(before) == Decimal(after):
+                raise ValueError("new quantity is the same as the recorded quantity")
+            self.conn.execute("UPDATE lots SET quantity = ? WHERE id = ?", (after, lot_id))
+        else:
+            field, before, after = "on_hold", str(int(row["on_hold"])), str(int(bool(new_on_hold)))
+            if before == after:
+                raise ValueError("hold state is already what was asked for")
+            self.conn.execute("UPDATE lots SET on_hold = ? WHERE id = ?", (after, lot_id))
+        self.conn.commit()
+
+        amendment = Amendment(
+            id=amendment_id,
+            target_kind="lot",
+            target_id=lot_id,
+            field=field,
+            before=before,
+            after=after,
+            cause=cause,
+            reason=reason,
+            actor=actor,
+            occurred_at=when,
+            facility_id=facility_id,
+            unit=row["unit"],
+            sequence=sequence,
+        )
+        self.conn.execute(
+            "INSERT INTO amendments (id,sequence,target_kind,target_id,field,before_value,after_value,"
+            "cause,reason,actor,occurred_at,facility_id,unit,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                amendment.id, sequence, amendment.target_kind, amendment.target_id, field, before, after,
+                cause, reason, actor, when.isoformat(), facility_id, row["unit"], _now(),
+            ),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "inventory_adjustment",
+            {
+                "inventory": lot_id,
+                "adjustment_type": field,
+                "reason": reason,
+                "removed_weight_or_volume": str(amendment.delta),
+                "unit": row["unit"],
+                "facility_location": facility_id,
+                "cause": cause,
+            },
+            when,
+            facility_id=facility_id or None,
+        )
+        return amendment
+
+    def create_justification(self, amendment_id: str, extra: str = "") -> "Justification":
+        """Draft the 64-4.222(12) notice for a non-exempt amendment. Nothing is sent."""
+        from .amendments import draft_text, new_id
+
+        amendment = self._amendment_row(amendment_id)
+        if amendment is None:
+            raise ValueError(f"no amendment {amendment_id!r}")
+        if amendment.exempt:
+            raise ValueError(f"cause {amendment.cause!r} is exempt from the written justification")
+        lot = self.conn.execute("SELECT * FROM lots WHERE id = ?", (amendment.target_id,)).fetchone()
+        product = self.conn.execute("SELECT * FROM products WHERE id = ?", (lot["product_id"],)).fetchone() if lot else None
+        facility = self.facility()
+        subject, body = draft_text(
+            amendment,
+            mmtc_name=facility.name if facility else "",
+            license_number=facility.license_number if facility else "",
+            product_name=product["name"] if product else "",
+            upid=product["upid"] if product else "",
+            extra=extra,
+        )
+        jid = new_id("jst")
+        self.conn.execute(
+            "INSERT INTO justifications (id,amendment_id,subject,body,created_at,deadline,recipient)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (jid, amendment_id, subject, body, _now(), amendment.deadline.isoformat(), DEPT_EMAIL),
+        )
+        self.conn.execute("UPDATE amendments SET justification_id = ? WHERE id = ?", (jid, amendment_id))
+        self.conn.commit()
+        return self._justification_row(jid)
+
+    def mark_justification_sent(self, justification_id: str, when: datetime | None = None):
+        when = when or datetime.now(timezone.utc)
+        cur = self.conn.execute("UPDATE justifications SET sent_at = ? WHERE id = ?", (when.isoformat(), justification_id))
+        if cur.rowcount == 0:
+            raise ValueError(f"no justification {justification_id!r}")
+        self.conn.commit()
+        return self._justification_row(justification_id)
+
+    def amendments(self, target_id: str | None = None) -> list:
+        sql = "SELECT * FROM amendments"
+        args: tuple = ()
+        if target_id:
+            sql += " WHERE target_id = ?"
+            args = (target_id,)
+        sql += " ORDER BY occurred_at, sequence"
+        return [self._amendment_from_row(r) for r in self.conn.execute(sql, args)]
+
+    def justifications(self, pending_only: bool = False) -> list:
+        sql = "SELECT * FROM justifications"
+        if pending_only:
+            sql += " WHERE sent_at IS NULL"
+        sql += " ORDER BY deadline"
+        return [self._justification_from_row(r) for r in self.conn.execute(sql)]
+
+    def journal(self, target_id: str) -> list[dict]:
+        """Everything that ever happened to one record, oldest first."""
+        entries: list[dict] = []
+        for e in self.ledger.entries():
+            payload = e.payload or {}
+            if target_id in (payload.get("inventory"), payload.get("inventory_lot")) or payload.get("lot_id") == target_id:
+                entries.append({"when": e.occurred_at, "kind": e.event_key, "detail": payload, "hash": e.hash})
+            elif e.event_key == "inventory_adjustment" and payload.get("inventory") == target_id:
+                entries.append({"when": e.occurred_at, "kind": e.event_key, "detail": payload, "hash": e.hash})
+        for a in self.amendments(target_id):
+            entries.append(
+                {
+                    "when": a.occurred_at.isoformat(),
+                    "kind": "amendment",
+                    "detail": {
+                        "field": a.field,
+                        "before": a.before,
+                        "after": a.after,
+                        "cause": a.cause,
+                        "reason": a.reason,
+                        "justification": a.justification_id,
+                    },
+                    "hash": a.id,
+                }
+            )
+        return sorted(entries, key=lambda x: x["when"])
+
+    def pending_amendments(self) -> list:
+        return [a for a in self.amendments() if a.requires_justification and not a.justification_id]
+
+    def adjustment_views(self) -> list:
+        """Amendments with their justification timestamp attached, ready for guardrails."""
+        from dataclasses import replace
+
+        sent = {j.amendment_id: j.sent_at for j in self.justifications()}
+        return [replace(a, justification_sent_at=sent.get(a.id)) for a in self.amendments()]
+
+    def _amendment_row(self, amendment_id: str):
+        row = self.conn.execute("SELECT * FROM amendments WHERE id = ?", (amendment_id,)).fetchone()
+        return self._amendment_from_row(row) if row else None
+
+    def _amendment_from_row(self, row):
+        from .amendments import Amendment
+
+        return Amendment(
+            id=row["id"], target_kind=row["target_kind"], target_id=row["target_id"], field=row["field"],
+            before=row["before_value"], after=row["after_value"], cause=row["cause"], reason=row["reason"],
+            actor=row["actor"], occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            facility_id=row["facility_id"], unit=row["unit"], justification_id=row["justification_id"],
+            sequence=row["sequence"],
+        )
+
+    def _justification_row(self, jid: str):
+        row = self.conn.execute("SELECT * FROM justifications WHERE id = ?", (jid,)).fetchone()
+        return self._justification_from_row(row) if row else None
+
+    def _justification_from_row(self, row):
+        from .amendments import Justification
+
+        return Justification(
+            id=row["id"], amendment_id=row["amendment_id"], subject=row["subject"], body=row["body"],
+            created_at=datetime.fromisoformat(row["created_at"]), deadline=datetime.fromisoformat(row["deadline"]),
+            sent_at=datetime.fromisoformat(row["sent_at"]) if row["sent_at"] else None, recipient=row["recipient"],
+        )
 
     # -- reads ---------------------------------------------------------------
 

@@ -41,9 +41,10 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/store.py` | Append-only, hash-chained event ledger with native CSV export and tamper detection |
 | `src/coontie/workspace.py` | The SQLite workspace: facility, rooms, products, lots, and the ledger beside them |
 | `src/coontie/importer.py` | Forgiving CSV import from an incumbent, with a per-row report and idempotent product matching |
+| `src/coontie/amendments.py` | Corrections with causes; the 64-4.222(12) notice drafted from the amendment |
 | `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
 | `src/coontie/forms.py` | The DH5058 inventory list, with the form's exact columns and enumerations |
-| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `verify` |
+| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `verify` |
 | `docs/forms/dh5058.md` | The form's field list and what Coontie does with each field |
 | `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
 | `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
@@ -79,6 +80,31 @@ The import is forgiving about column names (`Item Name`, `Product Name` and
 values (a bad product type is reported with the form's own options), and idempotent
 (re-importing reuses products by unique product ID instead of duplicating the
 catalogue). Rows that fail are skipped and listed; nothing aborts the batch.
+
+## Correct a record without losing it
+
+```bash
+# a miscount: not one of the rule's exemptions, so this produces a notice to draft
+python3 -m coontie.cli --db ws.sqlite3 amend --lot lot-abc123 --quantity 118 \
+  --cause miscount --reason "Physical recount: 118g on the shelf" --actor "C.Hurley"
+
+# read it, then mark it sent (the 12-hour clock is recorded)
+python3 -m coontie.cli --db ws.sqlite3 justify jst-1a2b --show
+python3 -m coontie.cli --db ws.sqlite3 justify jst-1a2b --send
+
+# a processing conversion: exempt under 64-4.222(12), no notice needed
+python3 -m coontie.cli --db ws.sqlite3 amend --lot lot-def456 --quantity 80 \
+  --cause processing --reason "10 units converted into the packaged lot"
+
+python3 -m coontie.cli --db ws.sqlite3 justifications --pending
+python3 -m coontie.cli --db ws.sqlite3 journal --lot lot-abc123
+python3 -m coontie.cli --db ws.sqlite3 alerts
+```
+
+Nothing is deleted. The original quantity stays in the ledger, the amendment is appended
+with its cause and who made it, and a non-exempt change drafts the written justification
+the department requires within 12 hours, addressed to
+`ommu_seedtosale@flhealth.gov` and citing Rule 64-4.222(12).
 
 ## Develop
 
