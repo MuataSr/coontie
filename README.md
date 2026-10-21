@@ -46,10 +46,12 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/driftfeed.py` | Reads the department's export through aliases; normalises statuses, units and quantities |
 | `src/coontie/driftview.py` | The one-screen drift page and its localhost server, standard library only |
 | `src/coontie/cultivation.py` | Batches, plants, the schedule-before-harvest rule, the 72-hour disposal wait, harvest arithmetic |
+| `src/coontie/processing.py` | Cure, lot conservation, conversions, ingredients, samples, final products, the immutable expiration |
 | `docs/flows/cultivation.md` | The seven cultivation screens and their fields, written before the module |
+| `docs/flows/processing.md` | The nine processing screens and their fields, written before the module |
 | `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
 | `src/coontie/forms.py` | The DH5058 inventory list, with the form's exact columns and enumerations |
-| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `integration`, `batch`, `plant`, `move`, `additive`, `harvest`, `growing`, `dispose`, `outage`, `watch`, `dispense`, `link`, `drift`, `verify` |
+| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `integration`, `batch`, `plant`, `move`, `additive`, `harvest`, `growing`, `dispose`, `cure`, `lot`, `split`, `convert`, `ingredient`, `adjust`, `sample`, `final`, `device`, `stock`, `outage`, `watch`, `dispense`, `link`, `drift`, `verify` |
 | `docs/forms/dh5058.md` | The form's field list and what Coontie does with each field |
 | `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
 | `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
@@ -210,6 +212,37 @@ Three refusals are deliberate, because the rule text is unambiguous: no batch be
 integration is recorded, no harvest without a matching schedule, no plant disposal inside
 72 hours of scheduling it. The `--at` flag everywhere is for back-entry and for tests; the
 default is now.
+
+## Processing, harvest to final product
+
+Screen spec first again: `docs/flows/processing.md`, nine screens.
+
+```bash
+python3 -m coontie.cli --db ws.sqlite3 cure --harvest hrv-1a2b --post 620 --waste 80 --room DRY1
+python3 -m coontie.cli --db ws.sqlite3 lot --kind "cured and dried flower" \
+  --cultivar "Blue Dream" --weight 600 --room INV1 --harvest hrv-1a2b
+python3 -m coontie.cli --db ws.sqlite3 split --lot stk-1a2b --amount 200 --to INV2
+python3 -m coontie.cli --db ws.sqlite3 convert --lot stk-1a2b --remove 300 \
+  --to extract --resulting 90 --waste 15 --room EXT1
+python3 -m coontie.cli --db ws.sqlite3 ingredient --lot stk-9f8e \
+  --name "MCT oil,Natural flavor" --amount "250,5" --unit "ml,ml"
+python3 -m coontie.cli --db ws.sqlite3 sample --lot stk-1a2b --weight 5 --cmtl "ACS Laboratory"
+python3 -m coontie.cli --db ws.sqlite3 final --lot stk-1a2b --upid blue-dream-3.5-smoking-DE1114 \
+  --units 27 --net 94.5 --per-unit 3.5 --packaged 2026-12-10 --expires 2027-06-10 --room INV1
+python3 -m coontie.cli --db ws.sqlite3 stock
+```
+
+Two rules are absolute here:
+
+- **Weight is conserved.** A lot keeps its original weight and every removal is a move, so
+  `remaining` is a subtraction. A lot cannot give up more than it holds, and a conversion
+  cannot return more than it consumed.
+- **The expiration date is immutable once recorded.** The catalog says so, and there is no
+  command that changes one. A second record for the same product and packaging date with a
+  different expiration is refused with that word in the message.
+
+A final product must carry a unique product ID that already exists in the DH5058 catalogue,
+so the catalogue S1 builds is what production actually uses.
 
 ## Develop
 

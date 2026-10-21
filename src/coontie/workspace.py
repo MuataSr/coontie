@@ -30,6 +30,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .amendments import Amendment, Justification
     from .cultivation import Additive, Batch, Disposal, Harvest, Plant
     from .outage import Outage
+    from .processing import Cure, Device, FinalProduct, LabSample, StockLot
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facilities (
@@ -247,6 +248,75 @@ CREATE TABLE IF NOT EXISTS disposals (
     unit         TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cures (
+    id            TEXT PRIMARY KEY,
+    harvest_id    TEXT NOT NULL,
+    plant_ids     TEXT NOT NULL,
+    post_weight   TEXT NOT NULL,
+    post_unit     TEXT NOT NULL,
+    waste_weight  TEXT NOT NULL,
+    waste_unit    TEXT NOT NULL,
+    room_id       TEXT NOT NULL,
+    cured_at      TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stock_lots (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,
+    cultivar      TEXT NOT NULL DEFAULT '',
+    room_id       TEXT NOT NULL,
+    original      TEXT NOT NULL,
+    unit          TEXT NOT NULL DEFAULT 'g',
+    harvest_ids   TEXT NOT NULL DEFAULT '[]',
+    source_lot_id TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stock_moves (
+    id            TEXT PRIMARY KEY,
+    lot_id        TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    amount        TEXT NOT NULL,
+    unit          TEXT NOT NULL,
+    target_lot_id TEXT NOT NULL DEFAULT '',
+    note          TEXT NOT NULL DEFAULT '',
+    at            TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lab_samples (
+    id            TEXT PRIMARY KEY,
+    source_lot_id TEXT NOT NULL,
+    weight        TEXT NOT NULL,
+    unit          TEXT NOT NULL,
+    cmtl_id       TEXT NOT NULL,
+    is_rnd        INTEGER NOT NULL DEFAULT 0,
+    at            TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS final_products (
+    id               TEXT PRIMARY KEY,
+    lot_id           TEXT NOT NULL,
+    upid             TEXT NOT NULL,
+    product_type     TEXT NOT NULL,
+    cultivar         TEXT NOT NULL DEFAULT '',
+    unit_count       INTEGER NOT NULL DEFAULT 0,
+    net_weight       TEXT NOT NULL,
+    unit             TEXT NOT NULL,
+    weight_per_unit  TEXT,
+    approved_name    TEXT NOT NULL DEFAULT '',
+    packaged_at      TEXT NOT NULL,
+    expiration_date  TEXT NOT NULL,
+    room_id          TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS devices (
+    id             TEXT PRIMARY KEY,
+    upid           TEXT NOT NULL DEFAULT '',
+    inventory_type TEXT NOT NULL,
+    unit_count     INTEGER NOT NULL,
+    room_id        TEXT NOT NULL,
+    at             TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
 """
 
 
@@ -409,7 +479,10 @@ class Workspace:
         )
         self.conn.commit()
         self.ledger.append(
-            "final_product",
+            # The DH5058 catalogue registration, not the DH5059 inventory event of the same
+            # concept: registering a product type is not producing a final product. The
+            # catalog's `final_product` key is reserved for the processing module.
+            "product_catalogue_add",
             {
                 "unique_product_id": product.upid,
                 "approved_product_name": product.name,
@@ -422,6 +495,18 @@ class Workspace:
             facility_id=product.facility_id,
         )
         return product, True
+
+    def _product_type(self, product_id: str) -> str:
+        row = self.conn.execute("SELECT product_type FROM products WHERE id = ?", (product_id,)).fetchone()
+        return row["product_type"] if row else ""
+
+    def _product_cultivar(self, product_id: str) -> str:
+        row = self.conn.execute("SELECT cultivar FROM products WHERE id = ?", (product_id,)).fetchone()
+        return row["cultivar"] if row else ""
+
+    def _product_facility(self, product_id: str) -> str:
+        row = self.conn.execute("SELECT facility_id FROM products WHERE id = ?", (product_id,)).fetchone()
+        return row["facility_id"] if row else ""
 
     def add_lot(self, lot: Lot) -> Lot:
         self.conn.execute(
@@ -436,7 +521,11 @@ class Workspace:
                 "lot_id": lot.id,
                 "weight_or_volume": str(lot.quantity),
                 "unit": lot.unit,
+                "inventory_type": self._product_type(lot.product_id),
+                "cultivar": self._product_cultivar(lot.product_id),
+                "facility_location": self._product_facility(lot.product_id),
                 "room": lot.room_id,
+                "harvest_batch_ids": [],
             },
             datetime.now(timezone.utc),
         )
@@ -535,14 +624,21 @@ class Workspace:
         if amendment.exempt:
             raise ValueError(f"cause {amendment.cause!r} is exempt from the written justification")
         lot = self.conn.execute("SELECT * FROM lots WHERE id = ?", (amendment.target_id,)).fetchone()
-        product = self.conn.execute("SELECT * FROM products WHERE id = ?", (lot["product_id"],)).fetchone() if lot else None
+        if lot:
+            product = self.conn.execute("SELECT * FROM products WHERE id = ?", (lot["product_id"],)).fetchone()
+            product_name = product["name"] if product else ""
+            upid = product["upid"] if product else ""
+        else:
+            stock = self.conn.execute("SELECT * FROM stock_lots WHERE id = ?", (amendment.target_id,)).fetchone()
+            product_name = f"{stock['kind']} {stock['cultivar']}".strip() if stock else ""
+            upid = ""
         facility = self.facility()
         subject, body = draft_text(
             amendment,
             mmtc_name=facility.name if facility else "",
             license_number=facility.license_number if facility else "",
-            product_name=product["name"] if product else "",
-            upid=product["upid"] if product else "",
+            product_name=product_name,
+            upid=upid,
             extra=extra,
         )
         jid = new_id("jst")
@@ -1166,7 +1262,9 @@ class Workspace:
                 "inventory_lot_create",
                 {
                     "inventory": target_product["id"], "lot_id": lot_id, "weight_or_volume": str(count),
-                    "unit": base_unit, "room": target_room.id, "sts_inventory_id": key,
+                    "unit": base_unit, "inventory_type": target_product["product_type"],
+                    "cultivar": target_product["cultivar"], "facility_location": target_product["facility_id"],
+                    "room": target_room.id, "harvest_batch_ids": [], "sts_inventory_id": key,
                     "recovered_from_state_snapshot": finding["snapshot_id"],
                 },
                 when,
@@ -1647,6 +1745,535 @@ class Workspace:
         )
         rooms = {r.id: r.name for r in self.rooms()}
         return {rooms.get(r["room_id"], r["room_id"]): r["n"] for r in rows}
+
+    # -- processing (S6) -----------------------------------------------------
+
+    def cure(self, harvest_id: str, *, post, waste="0", unit: str = "g", room: str, at: datetime | None = None):
+        from .outage import new_id
+        from .processing import Cure, amount as to_amount, utcnow
+
+        row = self.conn.execute("SELECT * FROM harvests WHERE id = ?", (harvest_id,)).fetchone()
+        if not row:
+            raise ValueError(f"no harvest {harvest_id!r}")
+        if not row["harvested_at"]:
+            raise ValueError(f"harvest {harvest_id} has not been harvested yet; there is nothing to cure")
+        target = self._room_ref(room)
+        post_d = to_amount(post)
+        waste_d = to_amount(waste)
+        if post_d <= 0:
+            raise ValueError("a cure needs a post-cure weight greater than zero")
+        if waste_d < 0:
+            raise ValueError("waste cannot be negative")
+        if waste_d + post_d > Decimal(row["wet_weight"]):
+            raise ValueError(
+                f"post-cure ({post_d}) plus waste ({waste_d}) exceeds the {row['wet_weight']} {row['wet_unit']} "
+                "that came off the plants"
+            )
+        at = at or utcnow()
+        cure = Cure(
+            id=new_id("cur"), harvest_id=harvest_id, plant_ids=tuple(json.loads(row["plant_ids"])),
+            post_weight=post_d, post_unit=unit, waste_weight=waste_d, waste_unit=unit,
+            room_id=target.id, cured_at=at,
+        )
+        self.conn.execute(
+            "INSERT INTO cures (id,harvest_id,plant_ids,post_weight,post_unit,waste_weight,waste_unit,room_id,"
+            "cured_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (cure.id, harvest_id, row["plant_ids"], str(post_d), unit, str(waste_d), unit, target.id,
+             at.isoformat(), _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "cure_dry",
+            {
+                "facility_location": self._facility_of_batch(
+                    self._batch_of_harvest(harvest_id)
+                ),
+                "harvest_batch_id": harvest_id, "plant_ids": json.loads(row["plant_ids"]),
+                "post_cure_weight": str(post_d), "post_cure_unit": unit,
+                "waste_weight": str(waste_d), "waste_unit": unit, "post_cure_room": target.id,
+            },
+            at,
+        )
+        return cure
+
+    def _batch_of_harvest(self, harvest_id: str) -> str:
+        row = self.conn.execute("SELECT plant_ids FROM harvests WHERE id = ?", (harvest_id,)).fetchone()
+        if not row:
+            return ""
+        ids = json.loads(row["plant_ids"])
+        if not ids:
+            return ""
+        plant = self.conn.execute("SELECT batch_id FROM plants WHERE id = ?", (ids[0],)).fetchone()
+        return plant["batch_id"] if plant else ""
+
+    def cured_available(self, harvest_id: str) -> Decimal:
+        row = self.conn.execute("SELECT post_weight FROM cures WHERE harvest_id = ? ORDER BY cured_at", (harvest_id,)).fetchall()
+        total = sum((Decimal(r["post_weight"]) for r in row), Decimal("0"))
+        used = Decimal("0")
+        for lot in self.stock_lots():
+            if harvest_id in lot.harvest_ids:
+                used += lot.original
+        return total - used
+
+    def new_lot(
+        self, *, kind: str, cultivar: str = "", weight, unit: str = "g", room: str, harvest_id: str = "",
+        at: datetime | None = None,
+    ) -> "StockLot":
+        from .outage import new_id
+        from .processing import StockLot, amount as to_amount, utcnow
+
+        target = self._room_ref(room)
+        value = to_amount(weight)
+        if value <= 0:
+            raise ValueError("a lot needs a weight greater than zero")
+        if harvest_id:
+            available = self.cured_available(harvest_id)
+            if value > available:
+                raise ValueError(
+                    f"harvest {harvest_id} has {available} {unit} cured and unallocated; {value} was asked for"
+                )
+        facility = self.facility()
+        at = at or utcnow()
+        lot = StockLot(
+            id=new_id("stk"), kind=kind.strip(), cultivar=cultivar.strip(), room_id=target.id,
+            original=value, unit=unit, harvest_ids=(harvest_id,) if harvest_id else (), created_at=at,
+        )
+        self.conn.execute(
+            "INSERT INTO stock_lots (id,kind,cultivar,room_id,original,unit,harvest_ids,source_lot_id,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (lot.id, lot.kind, lot.cultivar, lot.room_id, str(value), unit,
+             json.dumps(list(lot.harvest_ids)), "", at.isoformat()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "inventory_lot_create",
+            {
+                "weight_or_volume": str(value), "unit": unit, "inventory_type": lot.kind,
+                "cultivar": lot.cultivar, "facility_location": facility.id if facility else "",
+                "room": target.id, "harvest_batch_ids": list(lot.harvest_ids), "stock_lot_id": lot.id,
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return lot
+
+    def stock_lots(self) -> list["StockLot"]:
+        from .processing import StockLot
+
+        return [
+            StockLot(
+                id=r["id"], kind=r["kind"], cultivar=r["cultivar"], room_id=r["room_id"],
+                original=Decimal(r["original"]), unit=r["unit"], harvest_ids=tuple(json.loads(r["harvest_ids"])),
+                source_lot_id=r["source_lot_id"], created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in self.conn.execute("SELECT * FROM stock_lots ORDER BY created_at, rowid")
+        ]
+
+    def stock_lot(self, ref: str) -> "StockLot":
+        for lot in self.stock_lots():
+            if lot.id == ref or lot.id.startswith(ref):
+                return lot
+        raise ValueError(f"no stock lot matching {ref!r}")
+
+    def stock_moves(self, lot_id: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM stock_moves"
+        args: tuple = ()
+        if lot_id:
+            sql += " WHERE lot_id = ?"
+            args = (lot_id,)
+        sql += " ORDER BY at, rowid"
+        return [
+            {
+                "id": r["id"], "lot_id": r["lot_id"], "kind": r["kind"], "amount": Decimal(r["amount"]),
+                "unit": r["unit"], "target_lot_id": r["target_lot_id"], "note": r["note"],
+                "at": datetime.fromisoformat(r["at"]),
+            }
+            for r in self.conn.execute(sql, args)
+        ]
+
+    def stock_remaining(self, lot_id: str) -> Decimal:
+        from .processing import remaining
+
+        lot = self.stock_lot(lot_id)
+        moves = [m["amount"] for m in self.stock_moves(lot.id)]
+        return remaining(lot.original, moves)
+
+    def _move(self, lot_id: str, kind: str, amount: Decimal, unit: str, *, target_lot_id: str = "", note: str = "", at=None):
+        from .outage import new_id
+        from .processing import utcnow
+
+        at = at or utcnow()
+        self.conn.execute(
+            "INSERT INTO stock_moves (id,lot_id,kind,amount,unit,target_lot_id,note,at,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (new_id("mov"), lot_id, kind, str(amount), unit, target_lot_id, note, at.isoformat(), _now()),
+        )
+        self.conn.commit()
+
+    def split_lot(self, lot_ref: str, *, amount, to_room: str, at: datetime | None = None) -> "StockLot":
+        from .outage import new_id
+        from .processing import StockLot, amount as to_amount, check_removal, utcnow
+
+        lot = self.stock_lot(lot_ref)
+        currently = self.stock_remaining(lot.id)
+        value = to_amount(amount)
+        check_removal(lot, currently, value)
+        target = self._room_ref(to_room)
+        facility = self.facility()
+        at = at or utcnow()
+        child = StockLot(
+            id=new_id("stk"), kind=lot.kind, cultivar=lot.cultivar, room_id=target.id, original=value,
+            unit=lot.unit, harvest_ids=lot.harvest_ids, source_lot_id=lot.id, created_at=at,
+        )
+        self.conn.execute(
+            "INSERT INTO stock_lots (id,kind,cultivar,room_id,original,unit,harvest_ids,source_lot_id,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (child.id, child.kind, child.cultivar, child.room_id, str(value), lot.unit,
+             json.dumps(list(child.harvest_ids)), lot.id, at.isoformat()),
+        )
+        self.conn.commit()
+        self._move(lot.id, "split", value, lot.unit, target_lot_id=child.id, note="sublot", at=at)
+        self.ledger.append(
+            "lot_split",
+            {
+                "source_lot_id": lot.id, "facility_location": facility.id if facility else "",
+                "new_room": target.id, "removed_weight_or_volume": str(value), "unit": lot.unit,
+                "new_lot_id": child.id,
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return child
+
+    def convert(
+        self, lot_ref: str, *, remove, resulting_kind: str, resulting_weight, waste="0",
+        room: str, at: datetime | None = None,
+    ) -> "StockLot":
+        from .outage import new_id
+        from .processing import (
+            StockLot, amount as to_amount, check_conversion, check_removal, utcnow,
+        )
+
+        lot = self.stock_lot(lot_ref)
+        currently = self.stock_remaining(lot.id)
+        removed = to_amount(remove)
+        result = to_amount(resulting_weight)
+        waste_d = to_amount(waste)
+        check_removal(lot, currently, removed)
+        check_conversion(removed, result, waste_d)
+        target = self._room_ref(room)
+        facility = self.facility()
+        at = at or utcnow()
+        child = StockLot(
+            id=new_id("stk"), kind=resulting_kind.strip(), cultivar=lot.cultivar, room_id=target.id,
+            original=result, unit=lot.unit, harvest_ids=lot.harvest_ids, source_lot_id=lot.id, created_at=at,
+        )
+        self.conn.execute(
+            "INSERT INTO stock_lots (id,kind,cultivar,room_id,original,unit,harvest_ids,source_lot_id,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (child.id, child.kind, child.cultivar, child.room_id, str(result), lot.unit,
+             json.dumps(list(child.harvest_ids)), lot.id, at.isoformat()),
+        )
+        self.conn.commit()
+        self._move(lot.id, "conversion", removed, lot.unit, target_lot_id=child.id,
+                   note=f"{result} {lot.unit} {child.kind}, {waste_d} waste", at=at)
+        self.ledger.append(
+            "conversion",
+            {
+                "source_inventory_id": lot.id, "removed_weight_or_volume": str(removed),
+                "removed_unit": lot.unit, "resulting_inventory_type": child.kind,
+                "cultivar": child.cultivar, "resulting_weight_or_volume": str(result),
+                "resulting_unit": lot.unit, "waste_weight": str(waste_d), "waste_unit": lot.unit,
+                "facility_location": facility.id if facility else "", "post_conversion_room": target.id,
+                "resulting_lot_id": child.id,
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return child
+
+    def add_ingredients(
+        self, lot_ref: str, *, names: list[str], amounts: list[str], units: list[str], at: datetime | None = None
+    ) -> list[tuple[str, Decimal, str]]:
+        from .processing import amount as to_amount, utcnow
+
+        if not (len(names) == len(amounts) == len(units)):
+            raise ValueError("each ingredient needs one amount and one unit")
+        lot = self.stock_lot(lot_ref)
+        facility = self.facility()
+        at = at or utcnow()
+        parsed = [(n, to_amount(a), u) for n, a, u in zip(names, amounts, units)]
+        self.conn.execute(
+            "INSERT INTO stock_moves (id,lot_id,kind,amount,unit,target_lot_id,note,at,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (f"ing-{uuid.uuid4().hex[:10]}", lot.id, "ingredient", "0", units[0],
+             "", "; ".join(f"{n} {a}{u}" for n, a, u in parsed), at.isoformat(), _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "ingredient_add",
+            {
+                "inventory_id": lot.id, "ingredient_names": [n for n, _, _ in parsed],
+                "ingredient_amounts": [str(a) for _, a, _ in parsed], "units": [u for _, _, u in parsed],
+                "facility_location": facility.id if facility else "",
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return parsed
+
+    def adjust_stock(
+        self, lot_ref: str, *, remove, cause: str, reason: str, actor: str = "", at: datetime | None = None
+    ):
+        """A processing-lot correction: moves weight, keeps the cause, drafts the notice if needed."""
+        from .amendments import Amendment, new_id, validate_cause
+        from .processing import amount as to_amount, check_removal, utcnow
+
+        validate_cause(cause)
+        if not (reason or "").strip():
+            raise ValueError("an adjustment needs a reason")
+        lot = self.stock_lot(lot_ref)
+        currently = self.stock_remaining(lot.id)
+        value = to_amount(remove)
+        check_removal(lot, currently, value)
+        at = at or utcnow()
+        after = currently - value
+        amendment = Amendment(
+            id=new_id("amd"), target_kind="stock_lot", target_id=lot.id, field="quantity",
+            before=str(currently), after=str(after), cause=cause, reason=reason.strip(),
+            actor=actor, occurred_at=at, unit=lot.unit,
+            sequence=int(self.conn.execute(
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM amendments WHERE target_id = ?", (lot.id,)
+            ).fetchone()[0]),
+        )
+        self.conn.execute(
+            "INSERT INTO amendments (id,sequence,target_kind,target_id,field,before_value,after_value,cause,"
+            "reason,actor,occurred_at,facility_id,unit,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (amendment.id, amendment.sequence, amendment.target_kind, amendment.target_id, amendment.field,
+             amendment.before, amendment.after, cause, amendment.reason, actor, at.isoformat(),
+             lot.room_id, lot.unit, _now()),
+        )
+        self.conn.commit()
+        self._move(lot.id, "adjustment", value, lot.unit, note=f"{cause}: {reason}", at=at)
+        facility = self.facility()
+        self.ledger.append(
+            "inventory_adjustment",
+            {
+                "inventory": lot.id, "adjustment_type": "weight", "reason": reason,
+                "removed_weight_or_volume": str(value), "unit": lot.unit,
+                "facility_location": facility.id if facility else "", "cause": cause,
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        if amendment.exempt:
+            return amendment, None
+        return amendment, self.create_justification(amendment.id)
+
+    def lab_sample(
+        self, lot_ref: str, *, weight, cmtl_id: str, is_rnd: bool = False, at: datetime | None = None
+    ) -> "LabSample":
+        from .outage import new_id
+        from .processing import LabSample, amount as to_amount, check_removal, cmtl_note, utcnow
+
+        if not (cmtl_id or "").strip():
+            raise ValueError("a lab sample needs the identity of the certified testing laboratory (cmtl_id)")
+        lot = self.stock_lot(lot_ref)
+        currently = self.stock_remaining(lot.id)
+        value = to_amount(weight)
+        check_removal(lot, currently, value)
+        facility = self.facility()
+        at = at or utcnow()
+        sample = LabSample(
+            id=new_id("lab"), source_lot_id=lot.id, weight=value, unit=lot.unit,
+            cmtl_id=cmtl_id.strip(), is_rnd=is_rnd, at=at, note=cmtl_note(cmtl_id),
+        )
+        self.conn.execute(
+            "INSERT INTO lab_samples (id,source_lot_id,weight,unit,cmtl_id,is_rnd,at,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (sample.id, lot.id, str(value), lot.unit, sample.cmtl_id, int(is_rnd), at.isoformat(), _now()),
+        )
+        self.conn.commit()
+        self._move(lot.id, "lab_sample", value, lot.unit, note=sample.cmtl_id, at=at)
+        self.ledger.append(
+            "lab_sample_create",
+            {
+                "is_research_and_development": is_rnd, "source_ids": [lot.id],
+                "removed_weight_or_volume": str(value), "unit": lot.unit, "cmtl_id": sample.cmtl_id,
+                "facility_location": facility.id if facility else "",
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return sample
+
+    def final_product(
+        self,
+        lot_ref: str,
+        *,
+        upid: str,
+        unit_count: int,
+        net_weight,
+        unit: str = "g",
+        weight_per_unit=None,
+        packaged_at: datetime,
+        expiration,
+        room: str,
+        approved_name: str = "",
+        product_type: str = "",
+        at: datetime | None = None,
+    ) -> "FinalProduct":
+        from datetime import date as date_cls
+
+        from .outage import new_id
+        from .processing import (
+            FinalProduct, amount as to_amount, check_expiration, check_removal, expiration_conflict, utcnow,
+        )
+
+        product = self.find_product(upid)
+        if product is None:
+            available = ", ".join(p.upid for p in self.products()) or "none yet"
+            raise ValueError(
+                f"unique product ID {upid!r} is not in the catalogue; add it first (catalogue: {available})"
+            )
+        lot = self.stock_lot(lot_ref)
+        currently = self.stock_remaining(lot.id)
+        net = to_amount(net_weight)
+        check_removal(lot, currently, net)
+        expiration_date = expiration if isinstance(expiration, date_cls) else date_cls.fromisoformat(str(expiration))
+        check_expiration(packaged_at, expiration_date)
+        existing = self.final_for(upid, packaged_at)
+        conflict = expiration_conflict(existing, expiration_date)
+        if conflict:
+            raise ValueError(conflict)
+        target = self._room_ref(room)
+        facility = self.facility()
+        at = at or utcnow()
+        final = FinalProduct(
+            id=new_id("fin"), lot_id=lot.id, upid=upid, product_type=product_type or product.product_type,
+            cultivar=product.cultivar, unit_count=int(unit_count), net_weight=net, unit=unit,
+            weight_per_unit=(to_amount(weight_per_unit) if weight_per_unit not in (None, "") else None),
+            approved_name=approved_name or product.name, packaged_at=packaged_at,
+            expiration_date=expiration_date, room_id=target.id,
+        )
+        self.conn.execute(
+            "INSERT INTO final_products (id,lot_id,upid,product_type,cultivar,unit_count,net_weight,unit,"
+            "weight_per_unit,approved_name,packaged_at,expiration_date,room_id,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (final.id, lot.id, final.upid, final.product_type, final.cultivar, final.unit_count,
+             str(final.net_weight), final.unit,
+             str(final.weight_per_unit) if final.weight_per_unit is not None else None,
+             final.approved_name, packaged_at.isoformat(), expiration_date.isoformat(), target.id, _now()),
+        )
+        self.conn.commit()
+        self._move(lot.id, "final", net, lot.unit, note=upid, at=at)
+        self.ledger.append(
+            "final_product",
+            {
+                "cultivar": final.cultivar, "product_type": final.product_type,
+                "unit_count": final.unit_count, "expiration_date": expiration_date.isoformat(),
+                "net_weight_or_volume": str(final.net_weight), "unit": final.unit,
+                "approved_product_name": final.approved_name,
+                "weight_per_unit": str(final.weight_per_unit) if final.weight_per_unit is not None else "",
+                "packaged_at": packaged_at.isoformat(), "unique_product_id": final.upid,
+                "facility_location": facility.id if facility else "", "room": target.id,
+                "final_product_id": final.id,
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return final
+
+    def final_for(self, upid: str, packaged_at: datetime):
+        row = self.conn.execute(
+            "SELECT * FROM final_products WHERE upid = ? AND packaged_at = ?", (upid, packaged_at.isoformat())
+        ).fetchone()
+        if not row:
+            return None
+        return self._final_from_row(row)
+
+    def add_device(
+        self, *, inventory_type: str, unit_count: int, room: str, upid: str = "", at: datetime | None = None
+    ) -> "Device":
+        from .outage import new_id
+        from .processing import Device, utcnow
+
+        target = self._room_ref(room)
+        facility = self.facility()
+        at = at or utcnow()
+        device = Device(
+            id=new_id("dev"), upid=upid.strip(), inventory_type=inventory_type.strip(),
+            unit_count=int(unit_count), room_id=target.id, at=at,
+        )
+        if device.unit_count <= 0:
+            raise ValueError("a device inventory record needs a positive unit count")
+        self.conn.execute(
+            "INSERT INTO devices (id,upid,inventory_type,unit_count,room_id,at,created_at) VALUES (?,?,?,?,?,?,?)",
+            (device.id, device.upid, device.inventory_type, device.unit_count, target.id, at.isoformat(), _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "delivery_device_inventory",
+            {
+                "unique_product_id": device.upid, "inventory_type": device.inventory_type,
+                "unit_count": device.unit_count, "facility_location": facility.id if facility else "",
+                "room": target.id, "device_id": device.id,
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return device
+
+    # -- processing reads ----------------------------------------------------
+
+    def cures(self) -> list["Cure"]:
+        from .processing import Cure
+
+        return [
+            Cure(
+                id=r["id"], harvest_id=r["harvest_id"], plant_ids=tuple(json.loads(r["plant_ids"])),
+                post_weight=Decimal(r["post_weight"]), post_unit=r["post_unit"],
+                waste_weight=Decimal(r["waste_weight"]), waste_unit=r["waste_unit"],
+                room_id=r["room_id"], cured_at=datetime.fromisoformat(r["cured_at"]),
+            )
+            for r in self.conn.execute("SELECT * FROM cures ORDER BY cured_at, rowid")
+        ]
+
+    def samples(self) -> list["LabSample"]:
+        from .processing import LabSample
+
+        return [
+            LabSample(
+                id=r["id"], source_lot_id=r["source_lot_id"], weight=Decimal(r["weight"]), unit=r["unit"],
+                cmtl_id=r["cmtl_id"], is_rnd=bool(r["is_rnd"]), at=datetime.fromisoformat(r["at"]),
+            )
+            for r in self.conn.execute("SELECT * FROM lab_samples ORDER BY at, rowid")
+        ]
+
+    def finals(self) -> list["FinalProduct"]:
+        return [self._final_from_row(r) for r in self.conn.execute("SELECT * FROM final_products ORDER BY created_at")]
+
+    def _final_from_row(self, r) -> "FinalProduct":
+        from .processing import FinalProduct
+
+        return FinalProduct(
+            id=r["id"], lot_id=r["lot_id"], upid=r["upid"], product_type=r["product_type"],
+            cultivar=r["cultivar"], unit_count=r["unit_count"], net_weight=Decimal(r["net_weight"]),
+            unit=r["unit"], weight_per_unit=(Decimal(r["weight_per_unit"]) if r["weight_per_unit"] else None),
+            approved_name=r["approved_name"], packaged_at=datetime.fromisoformat(r["packaged_at"]),
+            expiration_date=date.fromisoformat(r["expiration_date"]), room_id=r["room_id"],
+        )
+
+    def devices(self) -> list["Device"]:
+        from .processing import Device
+
+        return [
+            Device(
+                id=r["id"], upid=r["upid"], inventory_type=r["inventory_type"],
+                unit_count=r["unit_count"], room_id=r["room_id"], at=datetime.fromisoformat(r["at"]),
+            )
+            for r in self.conn.execute("SELECT * FROM devices ORDER BY at, rowid")
+        ]
 
     # -- reads ---------------------------------------------------------------
 

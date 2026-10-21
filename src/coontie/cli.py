@@ -640,6 +640,174 @@ def cmd_dispose(args) -> int:
     return 0
 
 
+def _date_arg(value: str):
+    from datetime import datetime, timezone
+
+    if not value:
+        return None
+    text = value.strip()
+    if len(text) == 10:
+        return datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def cmd_cure(args) -> int:
+    ws = _ws(args)
+    try:
+        cure = ws.cure(args.harvest, post=args.post, waste=args.waste or "0", unit=args.unit, room=args.room,
+                       at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{cure.id}  cured {cure.post_weight} {cure.post_unit} ({cure.waste_weight} waste) from {cure.harvest_id}")
+    available = ws.cured_available(cure.harvest_id)
+    print(f"available to allocate into lots: {available} {cure.post_unit}")
+    ws.close()
+    return 0
+
+
+def cmd_lot(args) -> int:
+    ws = _ws(args)
+    try:
+        lot = ws.new_lot(kind=args.kind, cultivar=args.cultivar or "", weight=args.weight, unit=args.unit,
+                         room=args.room, harvest_id=args.harvest or "", at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{lot.id}  {lot.original} {lot.unit} of {lot.kind} {lot.cultivar} in {lot.room_id}")
+    ws.close()
+    return 0
+
+
+def cmd_split(args) -> int:
+    ws = _ws(args)
+    try:
+        child = ws.split_lot(args.lot, amount=args.amount, to_room=args.to, at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{child.id}  {child.original} {child.unit} split into {child.room_id}; {args.lot} now holds "
+          f"{ws.stock_remaining(child.source_lot_id)} {child.unit}")
+    ws.close()
+    return 0
+
+
+def cmd_convert(args) -> int:
+    ws = _ws(args)
+    try:
+        child = ws.convert(args.lot, remove=args.remove, resulting_kind=args.to, resulting_weight=args.resulting,
+                           waste=args.waste or "0", room=args.room, at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{child.id}  {child.original} {child.unit} of {child.kind} from {args.lot}; "
+          f"source now holds {ws.stock_remaining(child.source_lot_id)} {child.unit}")
+    ws.close()
+    return 0
+
+
+def cmd_ingredient(args) -> int:
+    from .processing import parse_csv_list
+
+    ws = _ws(args)
+    try:
+        parsed = ws.add_ingredients(
+            args.lot, names=parse_csv_list(args.name), amounts=parse_csv_list(args.amount),
+            units=parse_csv_list(args.unit), at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{len(parsed)} ingredient(s) added to {args.lot}: " + ", ".join(f"{n} {a} {u}" for n, a, u in parsed))
+    ws.close()
+    return 0
+
+
+def cmd_adjust(args) -> int:
+    ws = _ws(args)
+    try:
+        amendment, justification = ws.adjust_stock(
+            args.lot, remove=args.remove, cause=args.cause, reason=args.reason,
+            actor=args.actor or "", at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{amendment.id}  {amendment.before} -> {amendment.after} {amendment.unit}  cause={amendment.cause}")
+    if amendment.exempt:
+        print(f"exempt from the written justification under Rule 64-4.222(12): {amendment.cause}")
+    else:
+        print(f"justification drafted: {justification.id}  deadline {justification.deadline.isoformat()}")
+        print(f"review: coontie justify {justification.id} --show")
+    ws.close()
+    return 0
+
+
+def cmd_sample(args) -> int:
+    ws = _ws(args)
+    try:
+        sample = ws.lab_sample(args.lot, weight=args.weight, cmtl_id=args.cmtl, is_rnd=args.rnd,
+                               at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{sample.id}  {sample.weight} {sample.unit} to {sample.cmtl_id}"
+          + (" (research and development)" if sample.is_rnd else ""))
+    if sample.note:
+        print(sample.note)
+    ws.close()
+    return 0
+
+
+def cmd_final(args) -> int:
+    ws = _ws(args)
+    try:
+        final = ws.final_product(
+            args.lot, upid=args.upid, unit_count=args.units, net_weight=args.net, unit=args.unit,
+            weight_per_unit=args.per_unit, packaged_at=_date_arg(args.packaged), expiration=args.expires,
+            room=args.room, approved_name=args.approved or "", product_type=args.type or "",
+            at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{final.id}  {final.unit_count} x {final.upid}: {final.net_weight} {final.unit} "
+          f"({final.weight_per_unit or '-'} per unit), expires {final.expiration_date.isoformat()}")
+    print(f"{args.lot} now holds {ws.stock_remaining(final.lot_id)} {final.unit}")
+    ws.close()
+    return 0
+
+
+def cmd_device(args) -> int:
+    ws = _ws(args)
+    try:
+        device = ws.add_device(inventory_type=args.type, unit_count=args.units, room=args.room,
+                               upid=args.upid or "", at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{device.id}  {device.unit_count} x {device.inventory_type} into {device.room_id}")
+    ws.close()
+    return 0
+
+
+def cmd_stock(args) -> int:
+    ws = _ws(args)
+    lots = ws.stock_lots()
+    if not lots:
+        print("no processing lots yet")
+        ws.close()
+        return 0
+    print(f"{'lot':<14} {'kind':<22} {'original':>9} {'remaining':>9} {'room':<10} source")
+    for lot in lots:
+        left = ws.stock_remaining(lot.id)
+        rooms = {r.id: r.name for r in ws.rooms()}
+        print(
+            f"{lot.id:<14} {lot.kind[:22]:<22} {lot.original:>9} {left:>9} "
+            f"{rooms.get(lot.room_id, lot.room_id):<10} "
+            f"{lot.source_lot_id or (lot.harvest_ids[0] if lot.harvest_ids else '')}"
+        )
+    for final in ws.finals():
+        print(f"{final.id:<14} {final.product_type[:22]:<22} {final.unit_count:>9} units  "
+              f"expires {final.expiration_date.isoformat()}  {final.upid}")
+    for sample in ws.samples():
+        print(f"{sample.id:<14} sample {sample.weight} {sample.unit} -> {sample.cmtl_id}")
+    ws.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -785,6 +953,93 @@ def build_parser() -> argparse.ArgumentParser:
     dsp2.add_argument("--schedule", action="store_true", help="schedule the disposal; 72 hours must pass first")
     dsp2.add_argument("--at")
     dsp2.set_defaults(func=cmd_dispose)
+
+    cur = _db(sub.add_parser("cure", help="record a cure/dry of a harvest"))
+    cur.add_argument("--harvest", required=True)
+    cur.add_argument("--post", required=True, help="post-cure weight")
+    cur.add_argument("--waste")
+    cur.add_argument("--unit", default="g")
+    cur.add_argument("--room", required=True)
+    cur.add_argument("--at")
+    cur.set_defaults(func=cmd_cure)
+
+    lot = _db(sub.add_parser("lot", help="create a processing inventory lot"))
+    lot.add_argument("--kind", required=True, help="cured and dried flower, extract, edible, ...")
+    lot.add_argument("--cultivar")
+    lot.add_argument("--weight", required=True)
+    lot.add_argument("--unit", default="g")
+    lot.add_argument("--room", required=True)
+    lot.add_argument("--harvest", help="the harvest it came from")
+    lot.add_argument("--at")
+    lot.set_defaults(func=cmd_lot)
+
+    spl = _db(sub.add_parser("split", help="split a lot into a sublot"))
+    spl.add_argument("--lot", required=True)
+    spl.add_argument("--amount", required=True)
+    spl.add_argument("--to", required=True)
+    spl.add_argument("--at")
+    spl.set_defaults(func=cmd_split)
+
+    cnv = _db(sub.add_parser("convert", help="convert inventory through processing"))
+    cnv.add_argument("--lot", required=True)
+    cnv.add_argument("--remove", required=True)
+    cnv.add_argument("--to", required=True, help="resulting inventory type")
+    cnv.add_argument("--resulting", required=True, help="resulting weight")
+    cnv.add_argument("--waste")
+    cnv.add_argument("--room", required=True)
+    cnv.add_argument("--at")
+    cnv.set_defaults(func=cmd_convert)
+
+    ing = _db(sub.add_parser("ingredient", help="add ingredients to a lot"))
+    ing.add_argument("--lot", required=True)
+    ing.add_argument("--name", required=True, help="comma separated ingredient names")
+    ing.add_argument("--amount", required=True, help="comma separated amounts")
+    ing.add_argument("--unit", required=True, help="comma separated units")
+    ing.add_argument("--at")
+    ing.set_defaults(func=cmd_ingredient)
+
+    adj2 = _db(sub.add_parser("adjust", help="correct a processing lot (cause required)"))
+    adj2.add_argument("--lot", required=True)
+    adj2.add_argument("--remove", required=True)
+    adj2.add_argument("--cause", required=True)
+    adj2.add_argument("--reason", required=True)
+    adj2.add_argument("--actor")
+    adj2.add_argument("--at")
+    adj2.set_defaults(func=cmd_adjust)
+
+    smp = _db(sub.add_parser("sample", help="take a lab sample from a lot"))
+    smp.add_argument("--lot", required=True)
+    smp.add_argument("--weight", required=True)
+    smp.add_argument("--cmtl", required=True, help="the certified testing laboratory")
+    smp.add_argument("--rnd", action="store_true", help="research and development sample")
+    smp.add_argument("--at")
+    smp.set_defaults(func=cmd_sample)
+
+    fin = _db(sub.add_parser("final", help="record a final product"))
+    fin.add_argument("--lot", required=True)
+    fin.add_argument("--upid", required=True)
+    fin.add_argument("--units", type=int, required=True)
+    fin.add_argument("--net", required=True, help="net weight or volume")
+    fin.add_argument("--unit", default="g")
+    fin.add_argument("--per-unit", help="weight per unit")
+    fin.add_argument("--packaged", required=True, help="packaging date")
+    fin.add_argument("--expires", required=True, help="expiration date (immutable once recorded)")
+    fin.add_argument("--room", required=True)
+    fin.add_argument("--approved", help="department-approved product name")
+    fin.add_argument("--type", help="product type; defaults to the catalogue's")
+    fin.add_argument("--at")
+    fin.set_defaults(func=cmd_final)
+
+    dev = _db(sub.add_parser("device", help="record delivery device inventory"))
+    dev.add_argument("--type", required=True, help="inventory type")
+    dev.add_argument("--units", type=int, required=True)
+    dev.add_argument("--room", required=True)
+    dev.add_argument("--upid")
+    dev.add_argument("--at")
+    dev.set_defaults(func=cmd_device)
+
+    stk = _db(sub.add_parser("stock", help="processing lots, final products, samples"))
+    stk.set_defaults(func=cmd_stock)
 
     out = _db(sub.add_parser("outage", help="record a disconnection, restore it, inspect it"))
     what = out.add_mutually_exclusive_group()

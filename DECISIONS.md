@@ -36,6 +36,18 @@ Rulings by Mister K, recorded so no later session re-litigates them.
     are refused permanently, because the research says those are the parts that break.
 11. **Model identifiers are plain string aliases, not NewType.** The type checker
     fights every literal in a test and buys nothing at runtime in a dataclass skeleton.
+12. **`final_product` in the ledger means inventory production, not catalogue
+    registration.** The DH5058 catalogue entry (a product type with its unique product
+    ID) and the DH5059 `final_product` record (units, net weight, packaging date,
+    immutable expiration) are different events that share a name. Registering a product
+    type appends `product_catalogue_add`; only the processing module appends
+    `final_product`. Keeping both under one key would have made the department's field
+    list impossible to satisfy, and a test now checks every processing payload against
+    the catalog itself.
+13. **Weight is conserved by moves, never by an edited number.** Processing lots keep
+    their original weight and every removal is a `stock_moves` row, so "remaining" is a
+    subtraction rather than a stored field that can drift. A lot cannot give up more
+    than it holds, and a conversion cannot return more than it consumed.
 
 ## Open
 

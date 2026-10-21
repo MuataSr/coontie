@@ -71,7 +71,7 @@ class TestSetup(unittest.TestCase):
             self.assertEqual(keys[0], "facility_registered")
             self.assertIn("inventory_room_create", keys)
             self.assertIn("grow_room_create", keys)
-            self.assertIn("final_product", keys)
+            self.assertIn("product_catalogue_add", keys)
             ws.close()
 
     def test_duplicate_room_is_refused(self):

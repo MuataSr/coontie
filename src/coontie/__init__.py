@@ -12,7 +12,7 @@ credentials), MMUR access, point of sale, reporting UI.
 """
 
 from .events import BY_KEY, EVENTS, EventSpec, Stage, Timing, events_for_stage, realtime_events
-from . import amendments, compliance, drift, driftfeed, driftview, forms, guardrails, importer, model, outage, products, store, workspace
+from . import amendments, compliance, cultivation, drift, driftfeed, driftview, forms, guardrails, importer, model, outage, processing, products, store, workspace
 
 __all__ = [
     "BY_KEY",
@@ -24,6 +24,7 @@ __all__ = [
     "realtime_events",
     "amendments",
     "compliance",
+    "cultivation",
     "drift",
     "driftfeed",
     "driftview",
@@ -32,6 +33,7 @@ __all__ = [
     "importer",
     "model",
     "outage",
+    "processing",
     "products",
     "store",
     "workspace",
