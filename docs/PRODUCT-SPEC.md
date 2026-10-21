@@ -161,7 +161,7 @@ lives with the operator. Export is a first-class action, not a feature flag.
 | Guardrails | hold, expiry, adjustment, disconnect clock | **built (S3)**: the clock, the notice, the restoration notice, the outage CSV |
 | Cultivation | plants, harvests, waste, moves | **built (S5)**: integration gate, batches, plants, moves, additives, schedule-then-harvest, 72h disposal |
 | Processing | lots, splits, conversions, final products, lab samples | **built (S6)**: cure, lots, splits, conversions, ingredients, samples, final products with immutable expiration |
-| Transport | manifests and transfers | to build |
+| Transport | manifests and transfers | **built (S7)**: vehicles, manifest with its printable page, dispatch, receipt with rejections, wholesale invoice |
 | Dispensing | blocked on the MMUR question | not started |
 
 ## 9. Build sequence and gates
@@ -177,7 +177,7 @@ gate is green.
 | S4 | Drift view | **PASSED 2026-10-21**: `tests/test_s4_gate.py` seeds ten differences across all four classes (plus an ounce-for-gram record that must not be flagged), serves the screen over HTTP, and resolves all ten by posting the page's own forms; the open count reaches zero and the ledger verifies |
 | S5 | Cultivation module | **PASSED 2026-10-21**: `tests/test_s5_gate.py` runs seed to harvest to disposal through the CLI, including every refusal (no cultivation before integration, no harvest without a matching schedule, no disposal inside 72 hours), and then checks each cultivation ledger payload against the DH5059 catalog's own required field names |
 | S6 | Processing module | **PASSED 2026-10-21**: `tests/test_s6_gate.py` runs harvest to final product and accounts for every gram (600 out: 200 split, 300 converted, 5 sampled, 94.5 packaged, 0.5 corrected), refuses a conversion that returns more than it consumed, refuses a changed expiration with the word immutable, and checks all eight processing payloads against the DH5059 catalog |
-| S7 | Transport module | Manifests generated from the record and accepted by the transfer flow |
+| S7 | Transport module | **PASSED 2026-10-21**: `tests/test_s7_gate.py` builds a manifest whose page carries all seven items s. 381.986(8)(g) requires, refuses a one-person crew and an over-large load, dispatches (weight leaves the lot), refuses an unaccounted receipt and a second receipt, then receives 198 of 200 with 2 rejected and records the wholesale invoice; every transport payload is checked against the catalog |
 | S8 | Dispensing | Blocked until MMUR access is answered (see open questions) |
 | S9 | Deterministic assistance review | A written inventory of the places where plain Python can carry the "it understands me" feel without a model: fuzzy input matching, nearest-value suggestions in refusals, statistical anomaly flags, FTS5 search over the ledger, next-action assembly. Every one must be reproducible from the record alone, with a test proving the same input gives the same answer twice |
 

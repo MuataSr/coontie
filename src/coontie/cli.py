@@ -808,6 +808,133 @@ def cmd_stock(args) -> int:
     return 0
 
 
+def _pairs(values: list[str] | None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for chunk in values or []:
+        lot, _, qty = chunk.partition(":")
+        if not qty:
+            raise SystemExit(f"expected LOT:QUANTITY, got {chunk!r}")
+        out[lot.strip()] = qty.strip()
+    return out
+
+
+def cmd_vehicle(args) -> int:
+    ws = _ws(args)
+    try:
+        vehicle = ws.register_vehicle(
+            name=args.name or args.plate, vin=args.vin or "", plate=args.plate, make=args.make or "",
+            model=args.model or "", year=str(args.year or ""), color=args.color or "",
+            in_service=not args.out_of_service, at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{vehicle.id}  {vehicle.name}: {vehicle.description or '(make and model not recorded)'} "
+          f"plate {vehicle.plate}" + ("" if vehicle.in_service else "  OUT OF SERVICE"))
+    ws.close()
+    return 0
+
+
+def cmd_vehicles(args) -> int:
+    ws = _ws(args)
+    rows = ws.vehicles()
+    if not rows:
+        print("no vehicles registered")
+    for v in rows:
+        print(f"{v.id}  {v.name:<16} {v.description:<24} {v.plate:<12} "
+              + ("in service" if v.in_service else "OUT OF SERVICE"))
+    ws.close()
+    return 0
+
+
+def cmd_manifest(args) -> int:
+    from .transport import parse_crew
+
+    ws = _ws(args)
+    items = []
+    for chunk in args.item or []:
+        parts = chunk.split(":")
+        if len(parts) < 2:
+            sys.exit(f"expected LOT:QUANTITY[:FORM], got {chunk!r}")
+        items.append((parts[0], parts[1], parts[2] if len(parts) > 2 else ""))
+    try:
+        manifest = ws.build_manifest(
+            recipient_name=args.recipient, recipient_address=args.address, vehicle=args.vehicle,
+            employee_ids=parse_crew(args.employees), departure_at=_date_arg(args.depart),
+            arrival_at=_date_arg(args.arrive), items=items, route=args.route or "",
+            stops=tuple(args.stop or []), at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    path = ws.manifest_artifact(manifest.id)
+    print(f"{manifest.id}  {len(items)} item(s) to {manifest.recipient_name}, "
+          f"departing {manifest.departure_at.isoformat()}, arriving {manifest.arrival_at.isoformat()}")
+    print(f"manifest page: {path}")
+    print(f"next: coontie dispatch --manifest {manifest.id}")
+    ws.close()
+    return 0
+
+
+def cmd_manifests(args) -> int:
+    ws = _ws(args)
+    rows = ws.manifests()
+    if not rows:
+        print("no manifests yet")
+    for m in rows:
+        print(f"{m.id}  {m.status:<11} {m.recipient_name[:28]:<28} depart {m.departure_at.date()} "
+              f"crew {len(m.employee_ids)}  vehicle {m.vehicle_id}")
+    ws.close()
+    return 0
+
+
+def cmd_dispatch(args) -> int:
+    ws = _ws(args)
+    try:
+        manifest = ws.dispatch_manifest(args.manifest, at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    for item in ws.manifest_items(manifest.id):
+        print(f"  out: {item['quantity']} {item['unit']} of {item['form']} (lot {item['lot_id']}); "
+              f"remaining {ws.stock_remaining(item['lot_id'])}")
+    print(f"{manifest.id}  {manifest.status}")
+    print(f"next: coontie receive --manifest {manifest.id} --receiver \"<name>\" --room <room>")
+    ws.close()
+    return 0
+
+
+def cmd_receive(args) -> int:
+    ws = _ws(args)
+    try:
+        manifest = ws.receive_manifest(
+            args.manifest, receiver_name=args.receiver, room=args.room,
+            received=_pairs(args.received), rejected=_pairs(args.rejected), at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    for t in ws.transfers(manifest.id):
+        if t["direction"] != "in":
+            continue
+        for d in t["detail"]:
+            print(f"  in: {d['received']} {d['unit']} received, {d['rejected']} rejected of {d['quantity']} "
+                  f"({d['form']}, lot {d['lot_id']})")
+    print(f"{manifest.id}  {manifest.status}  acknowledged by {args.receiver}")
+    ws.close()
+    return 0
+
+
+def cmd_invoice(args) -> int:
+    ws = _ws(args)
+    try:
+        invoice_id = ws.record_invoice(
+            args.manifest, buyer=args.buyer, seller=args.seller, price=args.price,
+            quantity=args.quantity, unit=args.unit, at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{invoice_id}  wholesale invoice recorded against {args.manifest}")
+    ws.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -1040,6 +1167,61 @@ def build_parser() -> argparse.ArgumentParser:
 
     stk = _db(sub.add_parser("stock", help="processing lots, final products, samples"))
     stk.set_defaults(func=cmd_stock)
+
+    veh = _db(sub.add_parser("vehicle", help="register a delivery vehicle"))
+    veh.add_argument("--name")
+    veh.add_argument("--plate", required=True)
+    veh.add_argument("--vin")
+    veh.add_argument("--make")
+    veh.add_argument("--model")
+    veh.add_argument("--year")
+    veh.add_argument("--color")
+    veh.add_argument("--out-of-service", action="store_true")
+    veh.add_argument("--at")
+    veh.set_defaults(func=cmd_vehicle)
+
+    vehs = _db(sub.add_parser("vehicles", help="list registered vehicles"))
+    vehs.set_defaults(func=cmd_vehicles)
+
+    man = _db(sub.add_parser("manifest", help="build a transportation manifest"))
+    man.add_argument("--recipient", required=True)
+    man.add_argument("--address", required=True)
+    man.add_argument("--vehicle", required=True)
+    man.add_argument("--employees", required=True, help="comma separated names, at least two")
+    man.add_argument("--depart", required=True, help="departure date and time")
+    man.add_argument("--arrive", required=True, help="estimated arrival date and time")
+    man.add_argument("--item", action="append", metavar="LOT:QTY[:FORM]", help="repeatable")
+    man.add_argument("--route")
+    man.add_argument("--stop", action="append")
+    man.add_argument("--at")
+    man.set_defaults(func=cmd_manifest)
+
+    mans = _db(sub.add_parser("manifests", help="list manifests"))
+    mans.set_defaults(func=cmd_manifests)
+
+    dsp3 = _db(sub.add_parser("dispatch", help="record the transfer out (real time)"))
+    dsp3.add_argument("--manifest", required=True)
+    dsp3.add_argument("--at")
+    dsp3.set_defaults(func=cmd_dispatch)
+
+    rcv = _db(sub.add_parser("receive", help="record the transfer in (real time)"))
+    rcv.add_argument("--manifest", required=True)
+    rcv.add_argument("--receiver", required=True)
+    rcv.add_argument("--room", required=True)
+    rcv.add_argument("--received", action="append", metavar="LOT:QTY")
+    rcv.add_argument("--rejected", action="append", metavar="LOT:QTY")
+    rcv.add_argument("--at")
+    rcv.set_defaults(func=cmd_receive)
+
+    invc = _db(sub.add_parser("invoice", help="record a wholesale invoice for a manifest"))
+    invc.add_argument("--manifest", required=True)
+    invc.add_argument("--buyer", required=True)
+    invc.add_argument("--seller", required=True)
+    invc.add_argument("--price", required=True)
+    invc.add_argument("--quantity", required=True)
+    invc.add_argument("--unit", default="g")
+    invc.add_argument("--at")
+    invc.set_defaults(func=cmd_invoice)
 
     out = _db(sub.add_parser("outage", help="record a disconnection, restore it, inspect it"))
     what = out.add_mutually_exclusive_group()

@@ -48,6 +48,14 @@ Rulings by Mister K, recorded so no later session re-litigates them.
     their original weight and every removal is a `stock_moves` row, so "remaining" is a
     subtraction rather than a stored field that can drift. A lot cannot give up more
     than it holds, and a conversion cannot return more than it consumed.
+14. **The manifest is generated, not typed, and its refusals come from the statute.**
+    s. 381.986(8)(g) requires the manifest to be generated from the seed-to-sale system
+    and lists seven contents; the page carries all seven with the statute's own letters,
+    so a test can check them. Two conditions the statute forbids outright are refused in
+    the write path rather than warned about: fewer than two people in the vehicle, and a
+    vehicle not in good working order. A receipt must account for the whole dispatched
+    quantity as received plus rejected, because "short by two grams" with no rejection
+    recorded is exactly the discrepancy an inspector finds first.
 
 ## Open
 

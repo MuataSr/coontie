@@ -47,11 +47,13 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/driftview.py` | The one-screen drift page and its localhost server, standard library only |
 | `src/coontie/cultivation.py` | Batches, plants, the schedule-before-harvest rule, the 72-hour disposal wait, harvest arithmetic |
 | `src/coontie/processing.py` | Cure, lot conservation, conversions, ingredients, samples, final products, the immutable expiration |
+| `src/coontie/transport.py` | Vehicles, the manifest and its statutory page, dispatch and receipt arithmetic |
+| `docs/flows/transport.md` | The five transport screens, and the statute's seven manifest items mapped to fields |
 | `docs/flows/cultivation.md` | The seven cultivation screens and their fields, written before the module |
 | `docs/flows/processing.md` | The nine processing screens and their fields, written before the module |
 | `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
 | `src/coontie/forms.py` | The DH5058 inventory list, with the form's exact columns and enumerations |
-| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `integration`, `batch`, `plant`, `move`, `additive`, `harvest`, `growing`, `dispose`, `cure`, `lot`, `split`, `convert`, `ingredient`, `adjust`, `sample`, `final`, `device`, `stock`, `outage`, `watch`, `dispense`, `link`, `drift`, `verify` |
+| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `integration`, `batch`, `plant`, `move`, `additive`, `harvest`, `growing`, `dispose`, `cure`, `lot`, `split`, `convert`, `ingredient`, `adjust`, `sample`, `final`, `device`, `stock`, `vehicle`, `vehicles`, `manifest`, `manifests`, `dispatch`, `receive`, `invoice`, `outage`, `watch`, `dispense`, `link`, `drift`, `verify` |
 | `docs/forms/dh5058.md` | The form's field list and what Coontie does with each field |
 | `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
 | `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
@@ -243,6 +245,40 @@ Two rules are absolute here:
 
 A final product must carry a unique product ID that already exists in the DH5058 catalogue,
 so the catalogue S1 builds is what production actually uses.
+
+## Transport, and the manifest a driver carries
+
+Screen spec first: `docs/flows/transport.md`. The manifest is not our design: Rule 64-4.222(10)
+requires it to be **generated from the internal system**, and s. 381.986(8)(g), F.S. lists what
+it must contain.
+
+```bash
+python3 -m coontie.cli --db ws.sqlite3 vehicle --name "White Transit" --plate FL-MMTC-12 \
+  --make Ford --model Transit --year 2024
+python3 -m coontie.cli --db ws.sqlite3 manifest --recipient "Tampa Dispensary" \
+  --address "900 N Tampa St, Tampa FL 33602" --vehicle veh-1a2b \
+  --employees "Maria Lopez; Dev Patel" --depart 2026-12-15T08:00 --arrive 2026-12-15T11:30 \
+  --item stk-1a2b:200 --route "SR-50 west to I-75 south" --stop "Brooksville facility"
+python3 -m coontie.cli --db ws.sqlite3 dispatch --manifest man-1a2b
+python3 -m coontie.cli --db ws.sqlite3 receive --manifest man-1a2b \
+  --receiver "A. Reyes" --room INV2 --received stk-1a2b:198 --rejected stk-1a2b:2
+python3 -m coontie.cli --db ws.sqlite3 invoice --manifest man-1a2b \
+  --buyer "Tampa Dispensary" --seller "Nature's Grace FL, LLC" --price 1400 --quantity 198
+```
+
+`manifest` writes the printable page to `reports/manifest-<id>-page.txt` with the statute's
+seven required items lettered (a) through (g), the route, the stops, the crew with signature
+lines, and the receiving signature block. It is plain text on purpose: it is the page an
+officer asks for and the page the recipient signs.
+
+Refused in the write path, not warned about:
+
+- **fewer than two employees** (s. 381.986(8)(g)5.)
+- **a vehicle not in good working order** (s. 381.986(8)(g)2.)
+- dispatching more than the lot holds, dispatching twice
+- receiving before dispatch, receiving twice, receiving more than was dispatched
+- **a receipt that does not add up**: dispatched 200, received 198, rejected 0 leaves 2
+  unaccounted, and the record refuses to pretend otherwise
 
 ## Develop
 

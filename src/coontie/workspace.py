@@ -31,6 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .cultivation import Additive, Batch, Disposal, Harvest, Plant
     from .outage import Outage
     from .processing import Cure, Device, FinalProduct, LabSample, StockLot
+    from .transport import Manifest, Vehicle
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facilities (
@@ -316,6 +317,52 @@ CREATE TABLE IF NOT EXISTS devices (
     room_id        TEXT NOT NULL,
     at             TEXT NOT NULL,
     created_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS vehicles (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    vin        TEXT NOT NULL DEFAULT '',
+    plate      TEXT NOT NULL DEFAULT '',
+    make       TEXT NOT NULL DEFAULT '',
+    model      TEXT NOT NULL DEFAULT '',
+    year       TEXT NOT NULL DEFAULT '',
+    color      TEXT NOT NULL DEFAULT '',
+    in_service INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS manifests (
+    id                TEXT PRIMARY KEY,
+    facility_id       TEXT NOT NULL,
+    recipient_name    TEXT NOT NULL,
+    recipient_address TEXT NOT NULL,
+    vehicle_id        TEXT NOT NULL,
+    employee_ids      TEXT NOT NULL,
+    departure_at      TEXT NOT NULL,
+    arrival_at        TEXT NOT NULL,
+    route             TEXT NOT NULL DEFAULT '',
+    stops             TEXT NOT NULL DEFAULT '[]',
+    invoice_id        TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL DEFAULT 'built',
+    artifact_path     TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS manifest_items (
+    id          TEXT PRIMARY KEY,
+    manifest_id TEXT NOT NULL,
+    lot_id      TEXT NOT NULL,
+    quantity    TEXT NOT NULL,
+    unit        TEXT NOT NULL,
+    form        TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS transfers (
+    id            TEXT PRIMARY KEY,
+    manifest_id   TEXT NOT NULL,
+    direction     TEXT NOT NULL,
+    facility_id   TEXT NOT NULL DEFAULT '',
+    at            TEXT NOT NULL,
+    receiver_name TEXT NOT NULL DEFAULT '',
+    detail        TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL
 );
 """
 
@@ -915,7 +962,7 @@ class Workspace:
                     (subject, body, now.isoformat(), outage.id),
                 )
                 self.conn.commit()
-                path = self._write_artifact(outage.id, "notice", subject, body)
+                path = self._write_artifact(f"outage-{outage.id}", "notice", subject, body)
                 self.ledger.append(
                     "disconnect_notice",
                     {"outage": outage.id, "subject": subject, "dispensations_during_outage": count, "artifact": str(path)},
@@ -945,8 +992,8 @@ class Workspace:
                     (subject, body, now.isoformat(), csv_text, len(rows), now.isoformat(), fresh.id),
                 )
                 self.conn.commit()
-                notice_path = self._write_artifact(fresh.id, "restoration", subject, body)
-                csv_path = self._write_artifact(fresh.id, "dispensations", None, csv_text, suffix=".csv")
+                notice_path = self._write_artifact(f"outage-{fresh.id}", "restoration", subject, body)
+                csv_path = self._write_artifact(f"outage-{fresh.id}", "dispensations", None, csv_text, suffix=".csv")
                 self.conn.execute("UPDATE outages SET report_path=? WHERE id=?", (str(csv_path), fresh.id))
                 self.conn.commit()
                 self.ledger.append(
@@ -991,10 +1038,10 @@ class Workspace:
         self.conn.commit()
         return DEPT_EMAIL
 
-    def _write_artifact(self, outage_id: str, kind: str, subject: str | None, body: str, suffix: str = ".txt") -> Path:
+    def _write_artifact(self, stem: str, kind: str, subject: str | None, body: str, suffix: str = ".txt") -> Path:
         directory = Path(self.path).resolve().parent / "reports"
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"outage-{outage_id}-{kind}{suffix}"
+        path = directory / f"{stem}-{kind}{suffix}"
         text = body if subject is None else f"{subject}\n\n{body}\n"
         path.write_text(text, encoding="utf-8")
         return path
@@ -2273,6 +2320,346 @@ class Workspace:
                 unit_count=r["unit_count"], room_id=r["room_id"], at=datetime.fromisoformat(r["at"]),
             )
             for r in self.conn.execute("SELECT * FROM devices ORDER BY at, rowid")
+        ]
+
+    # -- transport (S7) ------------------------------------------------------
+
+    def register_vehicle(
+        self, *, name: str, vin: str = "", plate: str = "", make: str = "", model: str = "",
+        year: str = "", color: str = "", in_service: bool = True, at: datetime | None = None,
+    ) -> "Vehicle":
+        from .outage import new_id
+        from .transport import Vehicle, utcnow
+
+        if not (plate or "").strip():
+            raise ValueError("a vehicle needs its license plate (s. 381.986(8)(g)1.f.)")
+        at = at or utcnow()
+        vehicle = Vehicle(
+            id=new_id("veh"), name=name.strip() or plate.strip(), vin=vin.strip(), plate=plate.strip(),
+            make=make.strip(), model=model.strip(), year=year.strip(), color=color.strip(),
+            in_service=bool(in_service),
+        )
+        self.conn.execute(
+            "INSERT INTO vehicles (id,name,vin,plate,make,model,year,color,in_service,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (vehicle.id, vehicle.name, vehicle.vin, vehicle.plate, vehicle.make, vehicle.model,
+             vehicle.year, vehicle.color, int(vehicle.in_service), at.isoformat()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "vehicle_register",
+            {
+                "vin": vehicle.vin, "license_plate": vehicle.plate, "make": vehicle.make,
+                "model": vehicle.model, "year": vehicle.year, "color": vehicle.color,
+                "vehicle_name": vehicle.name,
+            },
+            at,
+        )
+        return vehicle
+
+    def vehicles(self) -> list["Vehicle"]:
+        from .transport import Vehicle
+
+        return [
+            Vehicle(
+                id=r["id"], name=r["name"], vin=r["vin"], plate=r["plate"], make=r["make"],
+                model=r["model"], year=r["year"], color=r["color"], in_service=bool(r["in_service"]),
+            )
+            for r in self.conn.execute("SELECT * FROM vehicles ORDER BY created_at, rowid")
+        ]
+
+    def vehicle(self, ref: str) -> "Vehicle":
+        for v in self.vehicles():
+            if v.id == ref or v.id.startswith(ref) or v.plate.lower() == (ref or "").lower():
+                return v
+        raise ValueError(f"no vehicle matching {ref!r}; register one with `coontie vehicle`")
+
+    def build_manifest(
+        self,
+        *,
+        recipient_name: str,
+        recipient_address: str,
+        vehicle: str,
+        employee_ids: tuple[str, ...],
+        departure_at: datetime,
+        arrival_at: datetime,
+        items: list[tuple[str, object, str]],
+        route: str = "",
+        stops: tuple[str, ...] = (),
+        invoice_id: str = "",
+        at: datetime | None = None,
+    ) -> "Manifest":
+        """Build a manifest and its printable page. Refuses what the statute forbids."""
+        from .outage import new_id
+        from .transport import Manifest, ManifestItem, amount as to_amount, render_manifest, utcnow, validate_manifest
+
+        facility = self.facility()
+        if not facility:
+            raise ValueError("no facility yet: run `coontie init` first")
+        veh = self.vehicle(vehicle)
+        parsed: list[ManifestItem] = []
+        for lot_ref, quantity, form in items:
+            lot = self.stock_lot(lot_ref)
+            parsed.append(ManifestItem(lot_id=lot.id, quantity=to_amount(quantity), unit=lot.unit,
+                                       form=(form or lot.kind).strip()))
+        validate_manifest(
+            recipient_name=recipient_name, recipient_address=recipient_address, vehicle=veh,
+            employee_ids=employee_ids, departure_at=departure_at, arrival_at=arrival_at, items=parsed,
+        )
+        at = at or utcnow()
+        manifest = Manifest(
+            id=new_id("man"), facility_id=facility.id, recipient_name=recipient_name.strip(),
+            recipient_address=recipient_address.strip(), vehicle_id=veh.id,
+            employee_ids=tuple(e.strip() for e in employee_ids if (e or "").strip()),
+            departure_at=departure_at, arrival_at=arrival_at, route=route.strip(),
+            stops=tuple(s.strip() for s in stops if (s or "").strip()), invoice_id=invoice_id,
+            status="built", created_at=at,
+        )
+        self.conn.execute(
+            "INSERT INTO manifests (id,facility_id,recipient_name,recipient_address,vehicle_id,employee_ids,"
+            "departure_at,arrival_at,route,stops,invoice_id,status,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (manifest.id, manifest.facility_id, manifest.recipient_name, manifest.recipient_address,
+             manifest.vehicle_id, json.dumps(list(manifest.employee_ids)), departure_at.isoformat(),
+             arrival_at.isoformat(), manifest.route, json.dumps(list(manifest.stops)), manifest.invoice_id,
+             manifest.status, at.isoformat()),
+        )
+        for item in parsed:
+            self.conn.execute(
+                "INSERT INTO manifest_items (id,manifest_id,lot_id,quantity,unit,form) VALUES (?,?,?,?,?,?)",
+                (new_id("mni"), manifest.id, item.lot_id, str(item.quantity), item.unit, item.form),
+            )
+        self.conn.commit()
+        labels = {(i.lot_id): self._lot_label(i.lot_id) for i in parsed}
+        page = render_manifest(
+            manifest, facility_name=facility.name, facility_address=self._facility_address(facility),
+            license_number=facility.license_number, vehicle=veh,
+            items=[(i, labels[i.lot_id]) for i in parsed], crew=manifest.employee_ids,
+        )
+        path = self._write_artifact(f"manifest-{manifest.id}", "page", None, page)
+        self.conn.execute("UPDATE manifests SET artifact_path = ? WHERE id = ?", (str(path), manifest.id))
+        self.conn.commit()
+        self.ledger.append(
+            "manifest",
+            {
+                "driver_employee_ids": list(manifest.employee_ids), "stops": list(manifest.stops),
+                "arrival_times": [arrival_at.isoformat()], "departure_times": [departure_at.isoformat()],
+                "route_directions": manifest.route, "item_ids": [i.lot_id for i in parsed],
+                "invoice_id": manifest.invoice_id, "creating_facility_location": manifest.facility_id,
+                "vehicle_id": veh.id, "manifest_id": manifest.id, "artifact": str(path),
+            },
+            at,
+            facility_id=manifest.facility_id,
+        )
+        return self.manifest(manifest.id)
+
+    def _facility_address(self, facility) -> str:
+        parts = [facility.street, facility.city, facility.state, facility.zip]
+        return ", ".join(p for p in parts if p) or "(address not recorded)"
+
+    def _lot_label(self, lot_id: str) -> str:
+        """Identify the lot, never its original weight: the manifest's quantity is the item's."""
+        lot = self.stock_lot(lot_id)
+        return f"{lot.kind} {lot.cultivar}".strip() + f" (lot {lot.id})"
+
+    def manifests(self) -> list["Manifest"]:
+        from .transport import Manifest
+
+        out = []
+        for r in self.conn.execute("SELECT * FROM manifests ORDER BY created_at, rowid"):
+            out.append(
+                Manifest(
+                    id=r["id"], facility_id=r["facility_id"], recipient_name=r["recipient_name"],
+                    recipient_address=r["recipient_address"], vehicle_id=r["vehicle_id"],
+                    employee_ids=tuple(json.loads(r["employee_ids"])),
+                    departure_at=datetime.fromisoformat(r["departure_at"]),
+                    arrival_at=datetime.fromisoformat(r["arrival_at"]), route=r["route"],
+                    stops=tuple(json.loads(r["stops"])), invoice_id=r["invoice_id"], status=r["status"],
+                    created_at=datetime.fromisoformat(r["created_at"]),
+                )
+            )
+        return out
+
+    def manifest(self, ref: str) -> "Manifest":
+        for m in self.manifests():
+            if m.id == ref or m.id.startswith(ref):
+                return m
+        raise ValueError(f"no manifest matching {ref!r}")
+
+    def manifest_items(self, manifest_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM manifest_items WHERE manifest_id = ? ORDER BY rowid", (manifest_id,)
+        )
+        return [
+            {"lot_id": r["lot_id"], "quantity": Decimal(r["quantity"]), "unit": r["unit"], "form": r["form"]}
+            for r in rows
+        ]
+
+    def manifest_artifact(self, ref: str) -> Path:
+        row = self.conn.execute("SELECT artifact_path FROM manifests WHERE id = ? OR id LIKE ?",
+                                (ref, f"{ref}%")).fetchone()
+        if not row or not row["artifact_path"]:
+            raise ValueError(f"no manifest artifact for {ref!r}")
+        return Path(row["artifact_path"])
+
+    def dispatch_manifest(self, ref: str, *, at: datetime | None = None) -> "Manifest":
+        """The transfer out: real time, and the weight leaves the lot."""
+        from .processing import check_removal, utcnow
+        from .transport import utcnow as _utcnow  # noqa: F401
+
+        manifest = self.manifest(ref)
+        if manifest.status != "built":
+            raise ValueError(f"manifest {manifest.id} is {manifest.status}; it can only be dispatched once")
+        at = at or utcnow()
+        items = self.manifest_items(manifest.id)
+        detail = []
+        for item in items:
+            lot = self.stock_lot(item["lot_id"])
+            check_removal(lot, self.stock_remaining(lot.id), item["quantity"])
+        for item in items:
+            self._move(item["lot_id"], "transfer_out", item["quantity"], item["unit"],
+                       note=f"manifest {manifest.id} to {manifest.recipient_name}", at=at)
+            detail.append({"lot_id": item["lot_id"], "quantity": str(item["quantity"]), "unit": item["unit"]})
+        self.conn.execute(
+            "INSERT INTO transfers (id,manifest_id,direction,facility_id,at,detail,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (f"trf-{uuid.uuid4().hex[:10]}", manifest.id, "out", manifest.facility_id, at.isoformat(),
+             json.dumps(detail), _now()),
+        )
+        self.conn.execute("UPDATE manifests SET status = 'dispatched' WHERE id = ?", (manifest.id,))
+        self.conn.commit()
+        self.ledger.append(
+            "transfer_out",
+            {
+                "item_ids": [i["lot_id"] for i in items], "manifest_id": manifest.id,
+                "quantity": str(sum(i["quantity"] for i in items)),
+                "unit": items[0]["unit"], "transferring_facility_location": manifest.facility_id,
+            },
+            at,
+            facility_id=manifest.facility_id,
+        )
+        return self.manifest(manifest.id)
+
+    def receive_manifest(
+        self,
+        ref: str,
+        *,
+        receiver_name: str,
+        room: str,
+        received: dict[str, str] | None = None,
+        rejected: dict[str, str] | None = None,
+        at: datetime | None = None,
+    ) -> "Manifest":
+        """The transfer in: real time, with what arrived and what was refused."""
+        from .outage import new_id
+        from .processing import amount as to_amount, utcnow
+
+        manifest = self.manifest(ref)
+        if manifest.status == "built":
+            raise ValueError(f"manifest {manifest.id} was never dispatched; there is nothing to receive")
+        if manifest.status == "received":
+            raise ValueError(f"manifest {manifest.id} was already received")
+        if not (receiver_name or "").strip():
+            raise ValueError("the receiving party's name is required for the acknowledgment")
+        target = self._room_ref(room)
+        at = at or utcnow()
+        items = self.manifest_items(manifest.id)
+        detail = []
+        for item in items:
+            dispatched = item["quantity"]
+            got = to_amount(received[item["lot_id"]]) if received and item["lot_id"] in received else dispatched
+            lost = to_amount(rejected[item["lot_id"]]) if rejected and item["lot_id"] in rejected else Decimal("0")
+            if got < 0 or lost < 0:
+                raise ValueError("received and rejected quantities cannot be negative")
+            if got > dispatched:
+                raise ValueError(
+                    f"{item['lot_id']}: {got} {item['unit']} received against {dispatched} dispatched"
+                )
+            if got + lost != dispatched:
+                raise ValueError(
+                    f"{item['lot_id']}: {dispatched} {item['unit']} dispatched but {got} received and {lost} "
+                    f"rejected leaves {dispatched - got - lost} unaccounted; record the rejection or the loss"
+                )
+            detail.append(
+                {"lot_id": item["lot_id"], "quantity": str(dispatched), "unit": item["unit"],
+                 "received": str(got), "rejected": str(lost), "form": item["form"]}
+            )
+        source_by_lot = {i["lot_id"]: self.stock_lot(i["lot_id"]) for i in items}
+        for entry in detail:
+            if Decimal(entry["received"]) <= 0:
+                continue
+            source = source_by_lot[entry["lot_id"]]
+            lot_id = new_id("stk")
+            self.conn.execute(
+                "INSERT INTO stock_lots (id,kind,cultivar,room_id,original,unit,harvest_ids,source_lot_id,created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (lot_id, source.kind, source.cultivar, target.id, entry["received"], entry["unit"],
+                 json.dumps(list(source.harvest_ids)), source.id, at.isoformat()),
+            )
+        self.conn.commit()
+        self.conn.execute(
+            "INSERT INTO transfers (id,manifest_id,direction,facility_id,at,receiver_name,detail,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (new_id("trf"), manifest.id, "in", manifest.facility_id, at.isoformat(), receiver_name.strip(),
+             json.dumps(detail), _now()),
+        )
+        self.conn.execute("UPDATE manifests SET status = 'received' WHERE id = ?", (manifest.id,))
+        self.conn.commit()
+        self.ledger.append(
+            "transfer_in",
+            {
+                "item_ids": [d["lot_id"] for d in detail], "manifest_id": manifest.id,
+                "units_received": sum(int(Decimal(d["received"])) for d in detail),
+                "units_rejected": sum(int(Decimal(d["rejected"])) for d in detail),
+                "quantity_received": str(sum(Decimal(d["received"]) for d in detail)),
+                "unit_received": detail[0]["unit"],
+                "quantity_rejected": str(sum(Decimal(d["rejected"]) for d in detail)),
+                "unit_rejected": detail[0]["unit"],
+                "receiving_facility_location": target.id, "receiver": receiver_name.strip(),
+            },
+            at,
+            facility_id=manifest.facility_id,
+        )
+        return self.manifest(manifest.id)
+
+    def record_invoice(
+        self, ref: str, *, buyer: str, seller: str, price, quantity, unit: str = "g", at: datetime | None = None
+    ) -> str:
+        from .outage import new_id
+        from .processing import amount as to_amount, utcnow
+
+        manifest = self.manifest(ref)
+        at = at or utcnow()
+        invoice_id = new_id("inv")
+        self.conn.execute("UPDATE manifests SET invoice_id = ? WHERE id = ?", (invoice_id, manifest.id))
+        self.conn.commit()
+        self.ledger.append(
+            "wholesale_invoice",
+            {
+                "item_ids": [i["lot_id"] for i in self.manifest_items(manifest.id)],
+                "buyer_facility_location": buyer.strip(), "seller_facility_location": seller.strip(),
+                "price": str(to_amount(price)), "quantity": str(to_amount(quantity)), "unit": unit,
+                "invoice_id": invoice_id, "manifest_id": manifest.id,
+            },
+            at,
+            facility_id=manifest.facility_id,
+        )
+        return invoice_id
+
+    def transfers(self, manifest_id: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM transfers"
+        args: tuple = ()
+        if manifest_id:
+            sql += " WHERE manifest_id = ?"
+            args = (manifest_id,)
+        sql += " ORDER BY at, rowid"
+        return [
+            {
+                "id": r["id"], "manifest_id": r["manifest_id"], "direction": r["direction"],
+                "at": datetime.fromisoformat(r["at"]), "receiver_name": r["receiver_name"],
+                "detail": json.loads(r["detail"]),
+            }
+            for r in self.conn.execute(sql, args)
         ]
 
     # -- reads ---------------------------------------------------------------
