@@ -355,7 +355,12 @@ def report(results: list[dict], out: Path, host: str) -> None:
         d = tally(res["docs"])
         intents = sum(1 for c in res["cmds"] if c["intent"])
         qtys = sum(1 for c in res["cmds"] if c["quantity"])
-        det = "n/a" if not res.get("flips") else f"{len(res['flips'])} flipped"
+        if "flips" not in res:
+            det = "not measured"
+        elif not res["flips"]:
+            det = "0 verdicts changed"
+        else:
+            det = f"{len(res['flips'])} changed"
         lines.append(
             f"| {res['name']} | {res.get('size_mb', '-')} MB | {res.get('load_s', '-')} s | "
             f"{res.get('rss_mb', '-')} MB | {res.get('latency_ms', '-')} ms | {res.get('p90_ms', '-')} ms | "
@@ -383,7 +388,7 @@ def report(results: list[dict], out: Path, host: str) -> None:
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def rescore(jsonl: Path) -> list[dict]:
+def rescore(jsonl: Path, meta_path: Path | None = None) -> list[dict]:
     """Rebuild every table from a stored run, so a scoring fix costs nothing but a re-read."""
     rows = [json.loads(line) for line in jsonl.read_text().splitlines() if line.strip()]
     docs = {c["id"]: c for c in CASES["documents"]}
@@ -392,6 +397,9 @@ def rescore(jsonl: Path) -> list[dict]:
     for r in rows:
         if r["model"] not in names:
             names.append(r["model"])
+    meta = {}
+    if meta_path and meta_path.exists():
+        meta = json.loads(meta_path.read_text()).get("models", {})
     results = []
     for name in names:
         doc_rows, cmd_rows = [], []
@@ -413,7 +421,32 @@ def rescore(jsonl: Path) -> list[dict]:
                     "quantity": first_number(got.get("quantity")) == first_number(case["quantity"]),
                     "crew": True,
                 })
-        results.append({"name": name, "docs": doc_rows, "cmds": cmd_rows})
+        latencies = [r["ms"] / 1000 for r in rows
+                     if r["model"] == name and r["kind"] != "rerun" and "ms" in r]
+        measured = dict(meta.get(name, {}))
+        if latencies and "latency_ms" not in measured:
+            measured["latency_ms"] = round(statistics.median(latencies) * 1000, 1)
+            measured["p90_ms"] = round(sorted(latencies)[int(len(latencies) * 0.9) - 1] * 1000, 1)
+        # determinism, recomputed from the stored reruns with this scorer rather than remembered
+        flips: list[str] = []
+        for r in rows:
+            if r["model"] != name or r["kind"] != "rerun" or r["case"] not in docs | cmds:
+                continue
+            first = next((x for x in rows if x["model"] == name and x["case"] == r["case"]
+                          and x["kind"] in ("doc", "cmd")), None)
+            if first is None:
+                continue
+            if r["case"] in docs:
+                case = docs[r["case"]]
+                for field in DOC_KEYS[case["kind"]]:
+                    if compare(field, case["truth"][field], first["parsed"].get(field)) != \
+                       compare(field, case["truth"][field], r["parsed"].get(field)):
+                        flips.append(f"{r['case']}.{field}")
+            else:
+                case = cmds[r["case"]]
+                if norm(first["parsed"].get("intent")) != norm(r["parsed"].get("intent")):
+                    flips.append(f"{r['case']}.intent")
+        results.append({"name": name, "docs": doc_rows, "cmds": cmd_rows, "flips": flips, **measured})
     return results
 
 
@@ -437,12 +470,14 @@ def main() -> int:
     ap.add_argument("--jsonl", default="docs/research/assist-bench-2026-10-21.jsonl")
     ap.add_argument("--baseline-only", action="store_true")
     ap.add_argument("--rescore", action="store_true", help="rebuild the tables from a stored run")
+    ap.add_argument("--meta", default="assist-bench-meta-2026-10-21.json",
+                    help="run-time measurements for --rescore (sizes, memory, latency, throughput)")
     ap.add_argument("models", nargs="*", help="name=/path/to/model.gguf")
     args = ap.parse_args()
 
     jsonl = ROOT / args.jsonl
     if args.rescore:
-        results = [run_baseline()] + rescore(jsonl)
+        results = [run_baseline()] + rescore(jsonl, jsonl.with_name(args.meta) if args.meta else None)
         report(results, ROOT / args.out, f"{os.uname().nodename}, {os.cpu_count()} threads")
         for res in results:
             d = tally(res["docs"])
@@ -459,6 +494,15 @@ def main() -> int:
         except Exception as exc:  # a dead server must not lose the other results
             print(f"  {name} failed: {exc}", flush=True)
             results.append({"name": f"{name} (failed: {exc})", "docs": [], "cmds": []})
+    meta_rows = {}
+    for res in results:
+        if res.get("name", "").startswith("deterministic"):
+            continue
+        keys = ("size_mb", "load_s", "rss_mb", "latency_ms", "p90_ms", "tok_s")
+        meta_rows[res["name"]] = {k: res[k] for k in keys if k in res}
+    if meta_rows:
+        (ROOT / args.out).with_name(args.meta if args.meta else "assist-bench-meta.json").write_text(
+            json.dumps({"models": meta_rows}, indent=2) + "\n", encoding="utf-8")
     report(results, ROOT / args.out, f"{os.uname().nodename}, {os.cpu_count()} threads")
     for res in results:
         d = tally(res["docs"])

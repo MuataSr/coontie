@@ -1,15 +1,15 @@
 # Track B measurement: sub-1B models against the deterministic baseline
 
-Run 2026-10-21 15:51 on papichulo-OptiPlex-790, 4 threads. Cases: `scripts/bench_cases.json` (12 documents, 8 commands). Protocol: `docs/ASSIST-PLAN.md`.
+Run 2026-10-21 15:54 on papichulo-OptiPlex-790, 4 threads. Cases: `scripts/bench_cases.json` (12 documents, 8 commands). Protocol: `docs/ASSIST-PLAN.md`.
 
 Scoring: a field the document does not state must come back empty. **wrong** means the model invented a value; **blank** means it refused one that was there. An invented value is the failure that matters in a compliance record.
 
 | Run | Size | Load | RSS | Median latency | p90 | tok/s | Doc accuracy | wrong | blank | Intent | Quantity | Determinism |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| deterministic baseline | - MB | - s | - MB | 0.07 ms | - ms | - | 98% | 0 | 1 | 8/8 | 8/8 | n/a |
-| granite-350m | - MB | - s | - MB | - ms | - ms | - | 89% | 3 | 4 | 7/8 | 8/8 | n/a |
-| smollm2-360m | - MB | - s | - MB | - ms | - ms | - | 85% | 4 | 6 | 7/8 | 8/8 | n/a |
-| qwen3-0.6b | - MB | - s | - MB | - ms | - ms | - | 96% | 0 | 3 | 7/8 | 8/8 | n/a |
+| deterministic baseline | - MB | - s | - MB | 0.06 ms | - ms | - | 98% | 0 | 1 | 8/8 | 8/8 | not measured |
+| granite-350m | 212.3 MB | 0.8 s | 286.6 MB | 3731.8 ms | 4365.5 ms | 14.1 | 89% | 3 | 4 | 7/8 | 8/8 | 0 verdicts changed |
+| smollm2-360m | 258.1 MB | 0.8 s | 332.9 MB | 7158.0 ms | 10472.3 ms | 8.95 | 85% | 4 | 6 | 7/8 | 8/8 | 0 verdicts changed |
+| qwen3-0.6b | 409.1 MB | 1.2 s | 585.7 MB | 9666.2 ms | 11942.6 ms | 8.03 | 96% | 0 | 3 | 7/8 | 8/8 | 0 verdicts changed |
 
 ## Per-field detail
 

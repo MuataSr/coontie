@@ -1,0 +1,8 @@
+{
+  "note": "Model-side measurements recorded at run time on 2026-10-21 (OG Rig, 2-core i3-2100, no AVX2, model preloaded, temperature 0). Kept out of the JSONL because the harness appends per-request rows; --rescore reads this file so a scoring fix does not cost the evidence.",
+  "models": {
+    "granite-350m": {"size_mb": 212.3, "load_s": 0.8, "rss_mb": 286.6, "latency_ms": 3731.8, "p90_ms": 4365.5, "tok_s": 14.1},
+    "smollm2-360m": {"size_mb": 258.1, "load_s": 0.8, "rss_mb": 332.9, "latency_ms": 7158.0, "p90_ms": 10472.3, "tok_s": 8.95},
+    "qwen3-0.6b": {"size_mb": 409.1, "load_s": 1.2, "rss_mb": 585.7, "latency_ms": 9666.2, "p90_ms": 11942.6, "tok_s": 8.03}
+  }
+}
