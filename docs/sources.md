@@ -7,10 +7,11 @@ description of a rule.
 |---|---|---|
 | Rule 64-4.221, F.A.C., MMTC Seed-to-Sale Tracking System Integration (New 8-24-26) | `https://www.flrules.org/gateway/readFile.asp?sid=0&tid=31211416&type=1&file=64-4.221.doc` | Downloaded the adopted rule document, converted with LibreOffice, transcribed into `docs/requirements/64-4.221.md` |
 | Rule 64-4.222, F.A.C., MMTC STS Tracking System Procedures (New 8-24-26) | `https://www.flrules.org/gateway/readFile.asp?sid=0&tid=31211513&type=1&file=64-4.222.doc` | Same method, transcribed into `docs/requirements/64-4.222.md` |
-| Form DH5059-OMMU-05/2026, MMTC Seed-to-Sale Required Data Collection Document (Eff. 05/26) | `https://flrules.org/gateway/reference.asp?No=Ref-19592`, file `64-4.222 MMTC Seed-to-Sale Required Data Collection Document_Final.rtf` | Downloaded the incorporated RTF, converted, and transcribed every field into `src/mmtc_record/events.py` |
+| Form DH5059-OMMU-05/2026, MMTC Seed-to-Sale Required Data Collection Document (Eff. 05/26) | `https://flrules.org/gateway/reference.asp?No=Ref-19592`, file `64-4.222 MMTC Seed-to-Sale Required Data Collection Document_Final.rtf` | Downloaded the incorporated RTF, converted, and transcribed every field into `src/coontie/events.py` |
 | Rule 64-4.210, F.A.C., MMTC Fines, Suspension, and Revocation | `https://www.law.cornell.edu/regulations/florida/Fla-Admin-Code-Ann-R-64-4-210` | For context on penalty exposure. Not yet modelled |
 | s. 381.986, F.S. (2025) | `https://www.flsenate.gov/Laws/statutes/2025/381.986` | For the enabling statute and the (8)(d)/(8)(e)/(8)(g) obligations |
 | BioTrack API access process and approved integrator list | `https://biotrack.com/legislation/florida/` | The department's STS vendor states API credentials require naming the MMTC or CMTL you integrate for |
+| The coontie and the atala butterfly (project name) | `https://www.floridamuseum.ufl.edu/earth-systems/blog/a-butterfly-on-the-move-the-atala-butterfly-and-its-coontie-connection/` | Read for the name's story: coontie as the atala host plant, commercial Florida Arrowroot harvesting outrunning the cycad, the butterfly believed extinct in the 1940s, and recovery after replanting |
 
 ## What is deliberately not used
 

@@ -21,12 +21,18 @@ Rulings by Mister K, recorded so no later session re-litigates them.
    service, not baked into the identity.
 8. **Module order after the core:** cultivation, processing, transport, dispensing.
    Dispensing last because it needs MMUR answered and it serves the existing 27.
+9. **The name is Coontie.** Botanical naming is the house convention for the OER and
+   OSS product line: **Sabal** (FCLE study app), **Tupelo Honey** (TEAS/HESI study
+   app), **Coontie** (this record system). The convention is the brand, so a new
+   product in this line gets a Florida native plant name, not a coined tech word.
+   The package is `coontie`, the copyright holder line is "The Coontie Authors", and
+   the story behind the plant lives in `README.md`.
 
 ## Open
 
-1. **Project name and repo org.** This tree uses the working name `mmtc-record`.
-   The publishable name, the org, and the copyright holder line in `LICENSE` are
-   Mister K's call before anything goes public.
+1. **Repo org.** No bare `coontie` GitHub handle is available (a user holds it), so
+   the repo publishes under a scoped org handle or Mister K's account. That handle
+   is his call.
 2. **MMUR access.** Whether third-party software can verify patient status and
    limits at dispense. Blocks any dispensary module.
 3. **Anchor operator.** An MMTC willing to be named in an integration plan. This is

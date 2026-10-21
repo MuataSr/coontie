@@ -1,8 +1,26 @@
-# MMTC Record
+# Coontie
 
 An open, MIT-licensed core for a Florida medical marijuana treatment center's
 **internal seed-to-sale system** (the "Internal STS Tracking System" in Rule
 64-4.221, F.A.C.).
+
+## The name
+
+Coontie, *Zamia integrifolia*, is Florida's only native cycad, and the host plant
+of the atala butterfly. Its roots carry starch; Indigenous communities in South
+Florida harvested it sustainably for generations. When settlers commercialized the
+starch as "Florida Arrowroot," large-scale harvesting outran what a slow-growing
+cycad could replenish. Coontie collapsed, and the atala went with it: by the 1940s
+the butterfly was believed extinct. It was rediscovered, and conservationists
+replanted coontie in their own yards. The plant came back first, and the butterfly
+followed it.
+
+A record is what lets a thing come back. That is the whole reason for this project,
+and it is why the name fits.
+
+Source: Florida Museum of Natural History, "A Butterfly on the Move: The Atala
+Butterfly and Its Coontie Connection" (see `docs/sources.md`).
+
 
 Free and open source, no per-seat licence, no vendor lock-in. The point is that an
 operator can read the code that reports their grams to the state.
@@ -15,10 +33,10 @@ the department's own data contract, turned into executable rules.
 
 | Module | What it does |
 |---|---|
-| `src/mmtc_record/events.py` | The 33 event types from Form DH5059-OMMU-05/2026, each with its fields, its timing (12 h or real time), and its citation |
-| `src/mmtc_record/compliance.py` | 22 executable rules citing 64-4.221, 64-4.222, and DH5059. Each check returns a `Finding` with a citation |
-| `src/mmtc_record/model.py` | The entities the record set forces into existence: facility, room, batch, plant, lot, final product, dispensation, manifest, adjustment |
-| `src/mmtc_record/store.py` | Append-only, hash-chained event ledger with native CSV export and tamper detection |
+| `src/coontie/events.py` | The 33 event types from Form DH5059-OMMU-05/2026, each with its fields, its timing (12 h or real time), and its citation |
+| `src/coontie/compliance.py` | 22 executable rules citing 64-4.221, 64-4.222, and DH5059. Each check returns a `Finding` with a citation |
+| `src/coontie/model.py` | The entities the record set forces into existence: facility, room, batch, plant, lot, final product, dispensation, manifest, adjustment |
+| `src/coontie/store.py` | Append-only, hash-chained event ledger with native CSV export and tamper detection |
 | `docs/requirements/` | Requirement matrices for 64-4.221 and 64-4.222, plus the generated DH5059 event catalog |
 | `docs/sources.md` | Every primary document, where it was fetched, and what is deliberately not used |
 

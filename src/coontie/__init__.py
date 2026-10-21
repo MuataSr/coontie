@@ -1,4 +1,4 @@
-"""mmtc_record: an open, MIT-licensed core for a Florida MMTC internal seed-to-sale system.
+"""coontie: an open, MIT-licensed core for a Florida MMTC internal seed-to-sale system.
 
 Scope of this package today (skeleton, no UI, no BioTrack adapter):
 

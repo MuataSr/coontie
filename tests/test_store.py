@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from mmtc_record.store import GENESIS, Ledger
+from coontie.store import GENESIS, Ledger
 
 T0 = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
 

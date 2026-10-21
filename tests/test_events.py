@@ -2,7 +2,7 @@
 
 import unittest
 
-from mmtc_record.events import BY_KEY, EVENTS, Stage, Timing, events_for_stage, realtime_events
+from coontie.events import BY_KEY, EVENTS, Stage, Timing, events_for_stage, realtime_events
 
 
 class TestCatalogShape(unittest.TestCase):

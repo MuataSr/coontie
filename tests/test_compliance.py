@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from mmtc_record import compliance as c
+from coontie import compliance as c
 
 T0 = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
 

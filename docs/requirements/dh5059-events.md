@@ -1,6 +1,6 @@
 # DH5059 event catalog
 
-Generated from `src/mmtc_record/events.py`. Do not edit by hand.
+Generated from `src/coontie/events.py`. Do not edit by hand.
 
 Source: Form DH5059-OMMU-05/2026, "MMTC Seed-to-Sale Required Data Collection
 Document" (Eff. 05/26), incorporated by reference in Rule 64-4.222(3), F.A.C.
