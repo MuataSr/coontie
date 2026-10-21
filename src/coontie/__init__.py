@@ -32,6 +32,7 @@ __all__ = [
     "forms",
     "guardrails",
     "importer",
+    "insight",
     "inspect",
     "model",
     "outage",

@@ -963,6 +963,86 @@ def cmd_audit(args) -> int:
     return 1 if (args.strict and any(f.severity == BREACH for f in findings)) else 0
 
 
+def cmd_lineage(args) -> int:
+    from .insight import lineage
+
+    ws = _ws(args)
+    try:
+        lines = lineage(ws, args.ref)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    for line in lines:
+        print(line.render())
+    ws.close()
+    return 0
+
+
+def cmd_explain(args) -> int:
+    from .insight import explain
+
+    ws = _ws(args)
+    try:
+        candidates = explain(ws, args.lot, gap=args.gap)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    if not candidates:
+        print("nothing has moved out of that lot")
+    for c in candidates:
+        print(c.line())
+    if args.gap not in (None, ""):
+        matches = [c for c in candidates if c.matches]
+        print(f"\n{len(matches)} move(s) match a difference of {args.gap}")
+        if not matches:
+            print("no single move accounts for it; the difference may be in the department's record, "
+                  "not ours")
+    ws.close()
+    return 0
+
+
+def cmd_next(args) -> int:
+    from .insight import prefill, prefill_command
+
+    ws = _ws(args)
+    got = prefill(ws, args.recipient or "")
+    if not got:
+        print("no manifests yet, nothing to reuse")
+        ws.close()
+        return 0
+    print(f"defaults from {got['from_manifest']} (last departure {got['last_departure'][:16]})")
+    print(f"  recipient  {got['recipient_name']}")
+    print(f"  address    {got['recipient_address']}")
+    print(f"  vehicle    {got['vehicle_id']}")
+    print(f"  crew       {', '.join(got['employees'])}")
+    for lot, qty, form in got["items"]:
+        print(f"  item       {qty} of {form} (lot {lot})")
+    print()
+    print(prefill_command(ws, args.recipient or ""))
+    ws.close()
+    return 0
+
+
+def cmd_anomalies(args) -> int:
+    from .insight import anomalies
+
+    ws = _ws(args)
+    found = anomalies(ws, threshold=args.threshold)
+    if not found:
+        print("nothing unusual, or not enough history to say (five records of a kind is the floor)")
+    for a in found:
+        print(a.line())
+    ws.close()
+    return 0
+
+
+def cmd_brief(args) -> int:
+    from .insight import brief
+
+    ws = _ws(args)
+    print(brief(ws, now=_now_arg(args.at), days=args.days))
+    ws.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -1250,6 +1330,28 @@ def build_parser() -> argparse.ArgumentParser:
     invc.add_argument("--unit", default="g")
     invc.add_argument("--at")
     invc.set_defaults(func=cmd_invoice)
+
+    lin = _db(sub.add_parser("lineage", help="where a jar came from"))
+    lin.add_argument("ref", help="a final product id (fin-...) or a lot (stk-...)")
+    lin.set_defaults(func=cmd_lineage)
+
+    exp = _db(sub.add_parser("explain", help="what in our history could explain a difference"))
+    exp.add_argument("--lot", required=True)
+    exp.add_argument("--gap", help="the difference you are trying to account for")
+    exp.set_defaults(func=cmd_explain)
+
+    nxt = _db(sub.add_parser("next", help="defaults for the next manifest"))
+    nxt.add_argument("--recipient")
+    nxt.set_defaults(func=cmd_next)
+
+    ano = _db(sub.add_parser("anomalies", help="numbers that do not look like your own history"))
+    ano.add_argument("--threshold", type=float, default=3.5, help="modified z-score (default 3.5)")
+    ano.set_defaults(func=cmd_anomalies)
+
+    brf = _db(sub.add_parser("brief", help="a paragraph about the period, assembled from counts"))
+    brf.add_argument("--days", type=int, default=7)
+    brf.add_argument("--at")
+    brf.set_defaults(func=cmd_brief)
 
     aud = _db(sub.add_parser("audit", help="what the department would find today"))
     aud.add_argument("--json", action="store_true", help="machine-readable findings")

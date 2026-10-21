@@ -318,6 +318,24 @@ asserted: see `docs/research/ASSIST-FINDINGS-2026-10-21.md` for why the determin
 ships and no model does. Both are deterministic, both are tested for giving the same
 answer twice, and neither can write to the record.
 
+## Deterministic insight
+
+Four more readers over the record, each one a question an operator asks:
+
+```bash
+coontie lineage fin-1a2b            # where this jar came from, and everything that touched it
+coontie explain --lot stk-1a2b --gap 200   # which move in our own history accounts for the difference
+coontie next --recipient tampa      # crew, vehicle, route and items from their last manifest
+coontie anomalies                   # a number that does not look like your own history
+coontie brief --days 7              # a paragraph about the week, assembled from counts
+```
+
+`lineage` walks a final product back through its lot, splits, conversions, lab sample, harvest,
+cure, batch and plants, then forward to its corrections and manifest. `anomalies` stays silent
+until there are five comparable records, because a new licensee deserves silence rather than a
+confident guess. `brief` agrees its verbs and nouns with its counts, because a sentence that says
+"1 corrections were made" is the fastest way to lose a reader's trust in the number.
+
 ## Develop
 
 ```bash
