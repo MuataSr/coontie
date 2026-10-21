@@ -483,6 +483,163 @@ def cmd_drift(args) -> int:
     return 0
 
 
+def cmd_integration(args) -> int:
+    ws = _ws(args)
+    if args.show or not args.approved_on:
+        record = ws.integration()
+        if not record:
+            print("no integration recorded")
+            print("cultivation cannot start until it is: Rule 64-4.221(4)")
+        else:
+            print(f"integration approved {record['approved_on'].date().isoformat()}  reference {record['reference'] or '(none)'}")
+        ws.close()
+        return 0
+    record = ws.record_integration(_now_arg(args.approved_on), args.reference or "", args.note or "")
+    print(f"integration recorded: approved {record['approved_on'].date().isoformat()}, reference {record['reference'] or '(none)'}")
+    print("cultivation may now be recorded")
+    ws.close()
+    return 0
+
+
+def cmd_batch(args) -> int:
+    from .cultivation import parse_plants
+
+    ws = _ws(args)
+    try:
+        batch = ws.start_batch(
+            cultivar=args.cultivar, room=args.room, count=args.count,
+            mother_plant_id=(parse_plants(args.mother)[0] if args.mother else ""),
+            when=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{batch.id}  {batch.count} x {batch.cultivar} into {batch.room_id}")
+    print(f"next: coontie plant --batch {batch.id} --count {batch.count}")
+    ws.close()
+    return 0
+
+
+def cmd_plant(args) -> int:
+    ws = _ws(args)
+    try:
+        made = ws.plant_batch(args.batch, args.count, at=_now_arg(args.at), is_mother=args.mother)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    ids = [p.id for p in made]
+    print(f"{len(ids)} plant(s) recorded: {ids[0]}" + (f"..{ids[-1]}" if len(ids) > 1 else ""))
+    ws.close()
+    return 0
+
+
+def cmd_move(args) -> int:
+    from .cultivation import parse_plants
+
+    ws = _ws(args)
+    try:
+        moved = ws.move_plants(parse_plants(args.plants), args.to, at=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{len(moved)} plant(s) moved to {args.to}")
+    ws.close()
+    return 0
+
+
+def cmd_additive(args) -> int:
+    from .cultivation import parse_plants
+
+    ws = _ws(args)
+    try:
+        additive = ws.apply_additive(
+            parse_plants(args.plants), description=args.what, amount=args.amount, unit=args.unit,
+            at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{additive.id}  {additive.amount} {additive.unit} of {additive.description} on {len(additive.plant_ids)} plant(s)")
+    ws.close()
+    return 0
+
+
+def cmd_harvest(args) -> int:
+    from .cultivation import parse_plants
+
+    ws = _ws(args)
+    ids = parse_plants(args.plants)
+    try:
+        if args.schedule:
+            harvest = ws.schedule_harvest(ids, at=_now_arg(args.at))
+            print(f"{harvest.id}  {len(ids)} plant(s) scheduled for harvest")
+            print(f"next: coontie harvest --plants {args.plants} --wet <g> --room <post-harvest room>")
+        else:
+            for required in ("wet", "room"):
+                if getattr(args, required) in (None, ""):
+                    sys.exit(f"a harvest needs --{required}")
+            harvest = ws.harvest(
+                ids, wet=args.wet, waste=args.waste or "0", other=args.other or "0", unit=args.unit,
+                post_harvest_room=args.room, at=_now_arg(args.at),
+            )
+            print(
+                f"{harvest.id}  harvested {len(harvest.plant_ids)} plant(s): "
+                f"{harvest.wet_weight} {harvest.wet_unit} wet flower, "
+                f"{harvest.waste_weight} waste, {harvest.other_weight} other, into {harvest.post_harvest_room_id}"
+            )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    ws.close()
+    return 0
+
+
+def cmd_growing(args) -> int:
+    ws = _ws(args)
+    plants = ws.plants()
+    if not plants:
+        print("no plants yet")
+        ws.close()
+        return 0
+    by_room = ws.growing()
+    for room, n in sorted(by_room.items()):
+        print(f"{room:<14} {n} growing")
+    states: dict[str, int] = {}
+    for p in plants:
+        states[p.state] = states.get(p.state, 0) + 1
+    print(", ".join(f"{v} {k}" for k, v in sorted(states.items())))
+    for h in ws.harvests():
+        state = "harvested" if h.completed else "scheduled"
+        print(
+            f"{h.id}  {state:<10} {len(h.plant_ids)} plant(s)"
+            + (f"  {h.wet_weight} {h.wet_unit} wet into {h.post_harvest_room_id}" if h.completed else "")
+        )
+    ws.close()
+    return 0
+
+
+def cmd_dispose(args) -> int:
+    from .cultivation import parse_plants
+
+    ws = _ws(args)
+    try:
+        if args.matter:
+            disposal = ws.dispose_matter(weight=args.matter, unit=args.unit, at=_now_arg(args.at))
+            print(f"{disposal.id}  plant matter disposed: {disposal.weight} {disposal.unit}")
+        else:
+            if not args.plants:
+                sys.exit("give --plants or --matter")
+            ids = parse_plants(args.plants)
+            if args.schedule:
+                for required in ("reason",):
+                    if not getattr(args, required):
+                        sys.exit("a disposal schedule needs --reason")
+                disposal = ws.schedule_disposal_plants(ids, reason=args.reason, at=_now_arg(args.at))
+                print(f"{disposal.id}  {len(ids)} plant(s) scheduled for disposal; 72 hours must pass before disposing")
+            else:
+                disposal = ws.dispose_plants(ids, at=_now_arg(args.at))
+                print(f"{disposal.id}  {len(ids)} plant(s) disposed")
+    except ValueError as exc:
+        sys.exit(str(exc))
+    ws.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -569,6 +726,65 @@ def build_parser() -> argparse.ArgumentParser:
 
     alr = _db(sub.add_parser("alerts", help="the guardrails: what is wrong right now"))
     alr.set_defaults(func=cmd_alerts)
+
+    integ = _db(sub.add_parser("integration", help="record the department's approval of your integration"))
+    integ.add_argument("--approved-on", help="date the integration was approved (yyyy-mm-dd)")
+    integ.add_argument("--reference", help="the integration plan reference")
+    integ.add_argument("--note")
+    integ.add_argument("--show", action="store_true")
+    integ.set_defaults(func=cmd_integration)
+
+    bat = _db(sub.add_parser("batch", help="start a batch of seeds or clones"))
+    bat.add_argument("--cultivar", required=True)
+    bat.add_argument("--room", required=True)
+    bat.add_argument("--count", type=int, required=True)
+    bat.add_argument("--mother", help="mother plant id, if the cuttings came from one of yours")
+    bat.add_argument("--at")
+    bat.set_defaults(func=cmd_batch)
+
+    pln = _db(sub.add_parser("plant", help="turn part of a batch into plants"))
+    pln.add_argument("--batch", required=True)
+    pln.add_argument("--count", type=int, required=True)
+    pln.add_argument("--mother", action="store_true", help="keep these as mother plants")
+    pln.add_argument("--at")
+    pln.set_defaults(func=cmd_plant)
+
+    mv = _db(sub.add_parser("move", help="move plants to another room"))
+    mv.add_argument("--plants", required=True, help="PL-0001,PL-0002 or a range PL-0001..PL-0012")
+    mv.add_argument("--to", required=True)
+    mv.add_argument("--at")
+    mv.set_defaults(func=cmd_move)
+
+    add = _db(sub.add_parser("additive", help="record an additive applied to plants"))
+    add.add_argument("--plants", required=True)
+    add.add_argument("--what", required=True, help="active ingredient, concentration, manufacturer lot, EPA reg")
+    add.add_argument("--amount", required=True)
+    add.add_argument("--unit", default="ml")
+    add.add_argument("--at")
+    add.set_defaults(func=cmd_additive)
+
+    hrv = _db(sub.add_parser("harvest", help="schedule a harvest, then record it"))
+    hrv.add_argument("--plants", required=True)
+    hrv.add_argument("--schedule", action="store_true", help="record the schedule only")
+    hrv.add_argument("--wet", help="wet flower weight")
+    hrv.add_argument("--waste")
+    hrv.add_argument("--other", help="other material weight")
+    hrv.add_argument("--unit", default="g")
+    hrv.add_argument("--room", help="post-harvest room")
+    hrv.add_argument("--at")
+    hrv.set_defaults(func=cmd_harvest)
+
+    grw = _db(sub.add_parser("growing", help="what is in the grow rooms"))
+    grw.set_defaults(func=cmd_growing)
+
+    dsp2 = _db(sub.add_parser("dispose", help="dispose of plants or plant matter"))
+    dsp2.add_argument("--plants")
+    dsp2.add_argument("--matter", help="weight of post-defoliation matter")
+    dsp2.add_argument("--reason")
+    dsp2.add_argument("--unit", default="g")
+    dsp2.add_argument("--schedule", action="store_true", help="schedule the disposal; 72 hours must pass first")
+    dsp2.add_argument("--at")
+    dsp2.set_defaults(func=cmd_dispose)
 
     out = _db(sub.add_parser("outage", help="record a disconnection, restore it, inspect it"))
     what = out.add_mutually_exclusive_group()

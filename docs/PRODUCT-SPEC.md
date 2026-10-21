@@ -159,7 +159,7 @@ lives with the operator. Export is a first-class action, not a feature flag.
 | Corrections | amend with cause and justification drafting | **built (S2)**: amend, justifications, justify, journal, alerts |
 | Drift | comparison against the state record | **built (S4)**: pull the department's export, classify, resolve on a one-screen page |
 | Guardrails | hold, expiry, adjustment, disconnect clock | **built (S3)**: the clock, the notice, the restoration notice, the outage CSV |
-| Cultivation | plants, harvests, waste, moves | to build |
+| Cultivation | plants, harvests, waste, moves | **built (S5)**: integration gate, batches, plants, moves, additives, schedule-then-harvest, 72h disposal |
 | Processing | lots, splits, conversions, final products, lab samples | to build |
 | Transport | manifests and transfers | to build |
 | Dispensing | blocked on the MMUR question | not started |
@@ -175,7 +175,7 @@ gate is green.
 | S2 | Corrections and justifications | **PASSED 2026-10-21**: `tests/test_s2_gate.py` amends seeded wrong records through the CLI; the non-exempt case yields a dated draft and a 12-hour deadline, the exempt case yields nothing, and the ledger holds both the original quantity and the amendment |
 | S3 | Guardrails and the disconnect clock | **PASSED 2026-10-21**: `tests/test_s3_gate.py` simulates a five-hour outage against a simulated clock; the only command run between disconnection and restoration is `watch`, which drafts the notice at 2h01m and records the miss at 3h; restoration produces the restoration notice and a CSV holding exactly the in-outage dispensations, and the 24-hour breach is caught too |
 | S4 | Drift view | **PASSED 2026-10-21**: `tests/test_s4_gate.py` seeds ten differences across all four classes (plus an ounce-for-gram record that must not be flagged), serves the screen over HTTP, and resolves all ten by posting the page's own forms; the open count reaches zero and the ledger verifies |
-| S5 | Cultivation module | A full cultivation arc, seed to harvest, recorded entirely in DH5059 shapes |
+| S5 | Cultivation module | **PASSED 2026-10-21**: `tests/test_s5_gate.py` runs seed to harvest to disposal through the CLI, including every refusal (no cultivation before integration, no harvest without a matching schedule, no disposal inside 72 hours), and then checks each cultivation ledger payload against the DH5059 catalog's own required field names |
 | S6 | Processing module | A full processing arc, lot to final product and lab sample, with the immutable expiration enforced |
 | S7 | Transport module | Manifests generated from the record and accepted by the transfer flow |
 | S8 | Dispensing | Blocked until MMUR access is answered (see open questions) |

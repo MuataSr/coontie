@@ -28,6 +28,7 @@ from .store import Ledger
 
 if TYPE_CHECKING:  # pragma: no cover
     from .amendments import Amendment, Justification
+    from .cultivation import Additive, Batch, Disposal, Harvest, Plant
     from .outage import Outage
 
 SCHEMA = """
@@ -184,6 +185,67 @@ CREATE TABLE IF NOT EXISTS drift_findings (
     resolution_note TEXT NOT NULL DEFAULT '',
     resolved_at    TEXT,
     created_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS integration (
+    id          TEXT PRIMARY KEY,
+    approved_on TEXT NOT NULL,
+    reference   TEXT NOT NULL DEFAULT '',
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS batches (
+    id              TEXT PRIMARY KEY,
+    facility_id     TEXT NOT NULL,
+    room_id         TEXT NOT NULL,
+    cultivar        TEXT NOT NULL,
+    count           INTEGER NOT NULL,
+    mother_plant_id TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS plants (
+    id         TEXT PRIMARY KEY,
+    batch_id   TEXT NOT NULL,
+    cultivar   TEXT NOT NULL,
+    room_id    TEXT NOT NULL,
+    is_mother  INTEGER NOT NULL DEFAULT 0,
+    planted_at TEXT NOT NULL,
+    state      TEXT NOT NULL DEFAULT 'immature',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS harvests (
+    id                   TEXT PRIMARY KEY,
+    room_id              TEXT NOT NULL,
+    post_harvest_room_id TEXT NOT NULL,
+    plant_ids            TEXT NOT NULL,
+    wet_weight           TEXT NOT NULL,
+    wet_unit             TEXT NOT NULL,
+    waste_weight         TEXT NOT NULL,
+    waste_unit           TEXT NOT NULL,
+    other_weight         TEXT NOT NULL,
+    other_unit           TEXT NOT NULL,
+    scheduled_at         TEXT,
+    harvested_at         TEXT,
+    created_at           TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS additives (
+    id          TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    amount      TEXT NOT NULL,
+    unit        TEXT NOT NULL,
+    plant_ids   TEXT NOT NULL,
+    applied_at  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS disposals (
+    id           TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    reason       TEXT NOT NULL DEFAULT '',
+    scheduled_at TEXT,
+    disposed_at  TEXT,
+    weight       TEXT,
+    unit         TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL
 );
 """
 
@@ -1147,6 +1209,444 @@ class Workspace:
                     return r
         rooms = [r for r in self.rooms() if r.kind == "inventory"]
         return rooms[0] if rooms else None
+
+    # -- cultivation (S5) ----------------------------------------------------
+
+    def record_integration(self, approved_on: datetime, reference: str = "", note: str = "") -> dict:
+        """Record that the department approved this MMTC's integration. Cultivation needs it."""
+        from .outage import new_id
+
+        rid = new_id("int")
+        self.conn.execute(
+            "INSERT INTO integration (id,approved_on,reference,note,created_at) VALUES (?,?,?,?,?)",
+            (rid, approved_on.isoformat(), reference, note, _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "integration_approved",
+            {"approved_on": approved_on.isoformat(), "reference": reference, "note": note},
+            approved_on,
+        )
+        return {"id": rid, "approved_on": approved_on, "reference": reference, "note": note}
+
+    def integration(self) -> dict | None:
+        row = self.conn.execute("SELECT * FROM integration ORDER BY approved_on DESC LIMIT 1").fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"], "approved_on": datetime.fromisoformat(row["approved_on"]),
+            "reference": row["reference"], "note": row["note"],
+        }
+
+    def _room_ref(self, value: str):
+        text = (value or "").strip().lower()
+        for r in self.rooms():
+            if text in (r.id.lower(), r.name.lower(), r.number.lower(), f"{r.name} {r.number}".lower()):
+                return r
+        raise ValueError(f"no room matches {value!r}; rooms are: {', '.join(r.name for r in self.rooms()) or 'none yet'}")
+
+    def start_batch(
+        self,
+        *,
+        cultivar: str,
+        room: str,
+        count: int,
+        mother_plant_id: str = "",
+        when: datetime | None = None,
+    ) -> "Batch":
+        from .cultivation import Batch, utcnow
+        from .outage import new_id
+
+        if not self.integration():
+            raise ValueError(
+                "cultivation cannot start before integration is complete and recorded: "
+                "Rule 64-4.221(4) requires full integration before cultivation authorization "
+                "(record it with `coontie integration --approved-on <date> --reference <plan ref>`)"
+            )
+        if not cultivar.strip():
+            raise ValueError("a batch needs a cultivar")
+        count = int(count)
+        if count <= 0:
+            raise ValueError("a batch needs a positive count of seeds or clones")
+        facility = self.facility()
+        if not facility:
+            raise ValueError("no facility yet: run `coontie init` first")
+        target = self._room_ref(room)
+        when = when or utcnow()
+        batch = Batch(
+            id=new_id("bat"), facility_id=facility.id, room_id=target.id, cultivar=cultivar.strip(),
+            count=count, mother_plant_id=mother_plant_id.strip(), created_at=when,
+        )
+        self.conn.execute(
+            "INSERT INTO batches (id,facility_id,room_id,cultivar,count,mother_plant_id,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (batch.id, batch.facility_id, batch.room_id, batch.cultivar, batch.count,
+             batch.mother_plant_id, when.isoformat()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "seed_clone_batch",
+            {
+                "facility_location": facility.id, "room": target.id, "cultivar": batch.cultivar,
+                "count": batch.count, "mother_plant_id": batch.mother_plant_id,
+            },
+            when,
+            facility_id=facility.id,
+        )
+        return batch
+
+    def plant_batch(
+        self, batch_id: str, count: int, *, at: datetime | None = None, is_mother: bool = False
+    ) -> list["Plant"]:
+        from .cultivation import Plant, plant_id, utcnow
+
+        row = self.conn.execute("SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
+        if not row:
+            raise ValueError(f"no batch {batch_id!r}")
+        already = int(self.conn.execute("SELECT COUNT(*) FROM plants WHERE batch_id = ?", (batch_id,)).fetchone()[0])
+        count = int(count)
+        if count <= 0:
+            raise ValueError("plant at least one")
+        if already + count > row["count"]:
+            raise ValueError(
+                f"batch {batch_id} holds {row['count']} and already has {already} planted; {count} more is too many"
+            )
+        at = at or utcnow()
+        next_number = int(self.conn.execute("SELECT COUNT(*) FROM plants").fetchone()[0]) + 1
+        made: list[Plant] = []
+        for offset in range(count):
+            plant = Plant(
+                id=plant_id(next_number + offset), batch_id=batch_id, cultivar=row["cultivar"],
+                room_id=row["room_id"], is_mother=is_mother, planted_at=at, state="immature",
+            )
+            self.conn.execute(
+                "INSERT INTO plants (id,batch_id,cultivar,room_id,is_mother,planted_at,state,created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (plant.id, plant.batch_id, plant.cultivar, plant.room_id, int(is_mother),
+                 at.isoformat(), plant.state, _now()),
+            )
+            self.conn.commit()
+            self.ledger.append(
+                "immature_plant",
+                {
+                    "facility_location": row["facility_id"], "room": plant.room_id,
+                    "cultivar": plant.cultivar, "is_mother_plant": bool(is_mother),
+                    "planted_at": at.isoformat(), "origin_batch_id": batch_id, "plant_id": plant.id,
+                },
+                at,
+                facility_id=row["facility_id"],
+            )
+            made.append(plant)
+        return made
+
+    def move_plants(self, ids: tuple[str, ...], to_room: str, *, at: datetime | None = None) -> list["Plant"]:
+        from .cultivation import require_growing, utcnow
+
+        target = self._room_ref(to_room)
+        at = at or utcnow()
+        plants = {p.id: p for p in self.plants()}
+        require_growing(plants, ids)
+        for pid in ids:
+            self.conn.execute("UPDATE plants SET room_id = ? WHERE id = ?", (target.id, pid))
+        self.conn.commit()
+        self.ledger.append(
+            "plant_move",
+            {"facility_location": plants[ids[0]].batch_id and self._facility_of_batch(plants[ids[0]].batch_id),
+             "plant_ids": list(ids), "to_room": target.id},
+            at,
+        )
+        return [self.plants_map()[pid] for pid in ids]
+
+    def _facility_of_batch(self, batch_id: str) -> str:
+        row = self.conn.execute("SELECT facility_id FROM batches WHERE id = ?", (batch_id,)).fetchone()
+        return row["facility_id"] if row else ""
+
+    def apply_additive(
+        self,
+        ids: tuple[str, ...],
+        *,
+        description: str,
+        amount,
+        unit: str,
+        at: datetime | None = None,
+    ) -> "Additive":
+        from .cultivation import Additive, amount as to_amount, require_growing, utcnow
+        from .outage import new_id
+
+        if not description.strip():
+            raise ValueError("say what was applied: active ingredient, concentration, manufacturer lot")
+        plants = self.plants_map()
+        require_growing(plants, ids)
+        value = to_amount(amount)
+        at = at or utcnow()
+        additive = Additive(
+            id=new_id("add"), description=description.strip(), amount=value, unit=unit.strip() or "ml",
+            plant_ids=tuple(ids), applied_at=at,
+        )
+        self.conn.execute(
+            "INSERT INTO additives (id,description,amount,unit,plant_ids,applied_at,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (additive.id, additive.description, str(value), additive.unit, json.dumps(list(ids)), at.isoformat(), _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "additive_application",
+            {
+                "facility_location": self._facility_of_batch(plants[ids[0]].batch_id),
+                "additive_description": additive.description, "amount": str(value), "unit": additive.unit,
+                "plant_ids": list(ids),
+            },
+            at,
+        )
+        return additive
+
+    def schedule_harvest(self, ids: tuple[str, ...], *, at: datetime | None = None) -> "Harvest":
+        from .cultivation import Harvest, require_growing, utcnow
+        from .outage import new_id
+
+        plants = self.plants_map()
+        require_growing(plants, ids)
+        wanted = set(ids)
+        for h in self.harvests():
+            if h.scheduled and not h.completed and wanted & set(h.plant_ids):
+                raise ValueError(
+                    f"{', '.join(sorted(wanted & set(h.plant_ids)))} is already scheduled for harvest ({h.id})"
+                )
+        at = at or utcnow()
+        harvest = Harvest(
+            id=new_id("hrv"), room_id=plants[ids[0]].room_id, post_harvest_room_id="",
+            plant_ids=tuple(ids), wet_weight=Decimal("0"), wet_unit="g",
+            waste_weight=Decimal("0"), waste_unit="g", other_weight=Decimal("0"), other_unit="g",
+            scheduled_at=at,
+        )
+        self.conn.execute(
+            "INSERT INTO harvests (id,room_id,post_harvest_room_id,plant_ids,wet_weight,wet_unit,waste_weight,"
+            "waste_unit,other_weight,other_unit,scheduled_at,harvested_at,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (harvest.id, harvest.room_id, "", json.dumps(list(ids)), "0", "g", "0", "g", "0", "g",
+             at.isoformat(), None, _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "harvest_schedule",
+            {"facility_location": self._facility_of_batch(plants[ids[0]].batch_id), "plant_ids": list(ids)},
+            at,
+        )
+        return harvest
+
+    def harvest(
+        self,
+        ids: tuple[str, ...],
+        *,
+        wet,
+        waste="0",
+        other="0",
+        unit: str = "g",
+        post_harvest_room: str,
+        at: datetime | None = None,
+    ) -> "Harvest":
+        from .cultivation import (
+            amount as to_amount,
+            check_harvest_weights,
+            matching_schedule,
+            describe_open_schedules,
+            require_growing,
+            utcnow,
+        )
+
+        plants = self.plants_map()
+        require_growing(plants, ids)
+        schedule = matching_schedule(self.harvests(), ids)
+        if schedule is None:
+            raise ValueError(
+                "a harvest must be scheduled before the plants are harvested (DH5059: Scheduling Plant "
+                f"Harvests); open schedules: {describe_open_schedules(self.harvests())}"
+            )
+        target = self._room_ref(post_harvest_room)
+        wet_d = to_amount(wet)
+        waste_d = to_amount(waste)
+        other_d = to_amount(other)
+        check_harvest_weights(wet_d, waste_d, other_d)
+        at = at or utcnow()
+
+        self.conn.execute(
+            "UPDATE harvests SET post_harvest_room_id=?, wet_weight=?, wet_unit=?, waste_weight=?, waste_unit=?,"
+            " other_weight=?, other_unit=?, harvested_at=? WHERE id=?",
+            (target.id, str(wet_d), unit, str(waste_d), unit, str(other_d), unit, at.isoformat(), schedule.id),
+        )
+        for pid in ids:
+            self.conn.execute("UPDATE plants SET state = 'harvested' WHERE id = ?", (pid,))
+        self.conn.commit()
+        self.ledger.append(
+            "harvest",
+            {
+                "facility_location": self._facility_of_batch(plants[ids[0]].batch_id),
+                "plant_ids": list(ids), "wet_flower_weight": str(wet_d), "wet_flower_unit": unit,
+                "waste_weight": str(waste_d), "waste_unit": unit,
+                "other_material_weight": str(other_d), "other_material_unit": unit,
+                "post_harvest_room": target.id, "harvest_id": schedule.id,
+            },
+            at,
+        )
+        return self.harvest_map()[schedule.id]
+
+    def schedule_disposal_plants(self, ids: tuple[str, ...], *, reason: str, at: datetime | None = None):
+        from .cultivation import Disposal, require_growing, utcnow
+        from .outage import new_id
+
+        plants = self.plants_map()
+        require_growing(plants, ids)
+        if not reason.strip():
+            raise ValueError("a disposal schedule needs a reason")
+        at = at or utcnow()
+        disposal = Disposal(
+            id=new_id("dsp"), kind="plants", subject=json.dumps(list(ids)), reason=reason.strip(),
+            scheduled_at=at, disposed_at=None,
+        )
+        self.conn.execute(
+            "INSERT INTO disposals (id,kind,subject,reason,scheduled_at,disposed_at,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (disposal.id, disposal.kind, disposal.subject, disposal.reason, at.isoformat(), None, _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "disposal_schedule_plants", {"plant_ids": list(ids), "reason": disposal.reason}, at
+        )
+        return disposal
+
+    def dispose_plants(self, ids: tuple[str, ...], *, at: datetime | None = None) -> "Disposal":
+        from .cultivation import Disposal, require_disposal_wait, require_growing, utcnow
+
+        plants = self.plants_map()
+        require_growing(plants, ids)
+        wanted = set(ids)
+        match = None
+        for d in self.disposals():
+            if d.kind == "plants" and d.disposed_at is None and set(json.loads(d.subject)) == wanted:
+                match = d
+                break
+        if match is None:
+            raise ValueError(
+                "plant disposal must be scheduled first (DH5059: Schedule Plant Disposal), and the schedule "
+                "must cover exactly these plants"
+            )
+        at = at or utcnow()
+        require_disposal_wait(match.scheduled_at, at)
+        self.conn.execute("UPDATE disposals SET disposed_at = ? WHERE id = ?", (at.isoformat(), match.id))
+        for pid in ids:
+            self.conn.execute("UPDATE plants SET state = 'disposed' WHERE id = ?", (pid,))
+        self.conn.commit()
+        self.ledger.append("disposal_plants", {"plant_ids": list(ids), "disposal_id": match.id}, at)
+        return [d for d in self.disposals() if d.id == match.id][0]
+
+    def dispose_matter(self, *, weight, unit: str = "g", at: datetime | None = None) -> "Disposal":
+        from .cultivation import Disposal, amount as to_amount, utcnow
+        from .outage import new_id
+
+        facility = self.facility()
+        value = to_amount(weight)
+        if value <= 0:
+            raise ValueError("plant matter disposal needs a weight greater than zero")
+        at = at or utcnow()
+        disposal = Disposal(
+            id=new_id("dsp"), kind="matter", subject="post-defoliation matter", reason="waste",
+            scheduled_at=None, disposed_at=at, weight=value, unit=unit,
+        )
+        self.conn.execute(
+            "INSERT INTO disposals (id,kind,subject,reason,scheduled_at,disposed_at,weight,unit,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (disposal.id, disposal.kind, disposal.subject, disposal.reason, None, at.isoformat(),
+             str(value), unit, _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "plant_matter_disposal",
+            {
+                "facility_location": facility.id if facility else "",
+                "collected_at": at.isoformat(), "weight": str(value), "unit": unit,
+            },
+            at,
+            facility_id=facility.id if facility else None,
+        )
+        return disposal
+
+    # -- cultivation reads ---------------------------------------------------
+
+    def batches(self) -> list["Batch"]:
+        from .cultivation import Batch
+
+        return [
+            Batch(
+                id=r["id"], facility_id=r["facility_id"], room_id=r["room_id"], cultivar=r["cultivar"],
+                count=r["count"], mother_plant_id=r["mother_plant_id"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in self.conn.execute("SELECT * FROM batches ORDER BY created_at, rowid")
+        ]
+
+    def plants(self) -> list["Plant"]:
+        from .cultivation import Plant
+
+        return [
+            Plant(
+                id=r["id"], batch_id=r["batch_id"], cultivar=r["cultivar"], room_id=r["room_id"],
+                is_mother=bool(r["is_mother"]), planted_at=datetime.fromisoformat(r["planted_at"]),
+                state=r["state"],
+            )
+            for r in self.conn.execute("SELECT * FROM plants ORDER BY id")
+        ]
+
+    def plants_map(self) -> dict:
+        return {p.id: p for p in self.plants()}
+
+    def harvests(self) -> list["Harvest"]:
+        from .cultivation import Harvest
+
+        return [
+            Harvest(
+                id=r["id"], room_id=r["room_id"], post_harvest_room_id=r["post_harvest_room_id"],
+                plant_ids=tuple(json.loads(r["plant_ids"])), wet_weight=Decimal(r["wet_weight"]),
+                wet_unit=r["wet_unit"], waste_weight=Decimal(r["waste_weight"]), waste_unit=r["waste_unit"],
+                other_weight=Decimal(r["other_weight"]), other_unit=r["other_unit"],
+                scheduled_at=datetime.fromisoformat(r["scheduled_at"]) if r["scheduled_at"] else None,
+                harvested_at=datetime.fromisoformat(r["harvested_at"]) if r["harvested_at"] else None,
+            )
+            for r in self.conn.execute("SELECT * FROM harvests ORDER BY created_at, rowid")
+        ]
+
+    def harvest_map(self) -> dict:
+        return {h.id: h for h in self.harvests()}
+
+    def additives(self) -> list["Additive"]:
+        from .cultivation import Additive
+
+        return [
+            Additive(
+                id=r["id"], description=r["description"], amount=Decimal(r["amount"]), unit=r["unit"],
+                plant_ids=tuple(json.loads(r["plant_ids"])), applied_at=datetime.fromisoformat(r["applied_at"]),
+            )
+            for r in self.conn.execute("SELECT * FROM additives ORDER BY applied_at, rowid")
+        ]
+
+    def disposals(self) -> list["Disposal"]:
+        from .cultivation import Disposal
+
+        return [
+            Disposal(
+                id=r["id"], kind=r["kind"], subject=r["subject"], reason=r["reason"],
+                scheduled_at=datetime.fromisoformat(r["scheduled_at"]) if r["scheduled_at"] else None,
+                disposed_at=datetime.fromisoformat(r["disposed_at"]) if r["disposed_at"] else None,
+                weight=Decimal(r["weight"]) if r["weight"] else None, unit=r["unit"],
+            )
+            for r in self.conn.execute("SELECT * FROM disposals ORDER BY created_at, rowid")
+        ]
+
+    def growing(self) -> dict:
+        rows = self.conn.execute(
+            "SELECT room_id, COUNT(*) AS n FROM plants WHERE state = 'immature' GROUP BY room_id"
+        )
+        rooms = {r.id: r.name for r in self.rooms()}
+        return {rooms.get(r["room_id"], r["room_id"]): r["n"] for r in rows}
 
     # -- reads ---------------------------------------------------------------
 

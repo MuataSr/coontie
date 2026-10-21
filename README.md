@@ -45,9 +45,11 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/outage.py` | The disconnection clock, the notice and restoration drafts, and the outage CSV |
 | `src/coontie/driftfeed.py` | Reads the department's export through aliases; normalises statuses, units and quantities |
 | `src/coontie/driftview.py` | The one-screen drift page and its localhost server, standard library only |
+| `src/coontie/cultivation.py` | Batches, plants, the schedule-before-harvest rule, the 72-hour disposal wait, harvest arithmetic |
+| `docs/flows/cultivation.md` | The seven cultivation screens and their fields, written before the module |
 | `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
 | `src/coontie/forms.py` | The DH5058 inventory list, with the form's exact columns and enumerations |
-| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `outage`, `watch`, `dispense`, `link`, `drift`, `verify` |
+| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `integration`, `batch`, `plant`, `move`, `additive`, `harvest`, `growing`, `dispose`, `outage`, `watch`, `dispense`, `link`, `drift`, `verify` |
 | `docs/forms/dh5058.md` | The form's field list and what Coontie does with each field |
 | `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
 | `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
@@ -176,6 +178,38 @@ Quantities are normalised before comparison, so 60 g and 2.117 oz are **not** a 
 the rule's conversion is applied in one place (`compliance.ounces_to_grams`). An
 unrecognised status in the state's export is passed through rather than matched to the
 nearest thing, so it surfaces as a difference instead of hiding.
+
+## Cultivation, seed to harvest
+
+Screen spec first, then code: `docs/flows/cultivation.md` lists the seven screens and the
+fields in the order a person records them, and the module is built to that shape.
+
+```bash
+# cultivation is gated on integration, exactly as Rule 64-4.221(4) requires
+python3 -m coontie.cli --db ws.sqlite3 integration --approved-on 2026-09-20 --reference INT-2026-0042
+
+python3 -m coontie.cli --db ws.sqlite3 batch --cultivar "Blue Dream" --room G1 --count 12
+python3 -m coontie.cli --db ws.sqlite3 plant --batch bat-1a2b --count 12
+python3 -m coontie.cli --db ws.sqlite3 growing
+python3 -m coontie.cli --db ws.sqlite3 move --plants PL-0001..PL-0012 --to F2
+python3 -m coontie.cli --db ws.sqlite3 additive --plants PL-0001..PL-0012 \
+  --what "Neem oil 0.5%, lot NX-1, EPA 70051-2" --amount 40 --unit ml
+
+# a harvest must be scheduled first, and the schedule must cover exactly those plants
+python3 -m coontie.cli --db ws.sqlite3 harvest --plants PL-0001..PL-0012 --schedule
+python3 -m coontie.cli --db ws.sqlite3 harvest --plants PL-0001..PL-0012 \
+  --wet 1800 --waste 240 --other 60 --room DRY1
+
+# disposal waits 72 hours after it is scheduled
+python3 -m coontie.cli --db ws.sqlite3 dispose --plants PL-0013,PL-0014 --reason "male plants" --schedule
+python3 -m coontie.cli --db ws.sqlite3 dispose --plants PL-0013,PL-0014
+python3 -m coontie.cli --db ws.sqlite3 dispose --matter 500
+```
+
+Three refusals are deliberate, because the rule text is unambiguous: no batch before
+integration is recorded, no harvest without a matching schedule, no plant disposal inside
+72 hours of scheduling it. The `--at` flag everywhere is for back-entry and for tests; the
+default is now.
 
 ## Develop
 
