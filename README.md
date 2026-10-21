@@ -49,6 +49,7 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/processing.py` | Cure, lot conservation, conversions, ingredients, samples, final products, the immutable expiration |
 | `src/coontie/transport.py` | Vehicles, the manifest and its statutory page, dispatch and receipt arithmetic |
 | `docs/flows/transport.md` | The five transport screens, and the statute's seven manifest items mapped to fields |
+| `docs/flows/gui.md` | The ten interface screens for the local appliance, written before the code |
 | `docs/flows/cultivation.md` | The seven cultivation screens and their fields, written before the module |
 | `docs/flows/processing.md` | The nine processing screens and their fields, written before the module |
 | `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
