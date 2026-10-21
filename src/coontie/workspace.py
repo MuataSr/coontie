@@ -13,6 +13,7 @@ Design notes, deliberately boring:
 
 from __future__ import annotations
 
+import uuid
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -26,6 +27,7 @@ from .store import Ledger
 
 if TYPE_CHECKING:  # pragma: no cover
     from .amendments import Amendment, Justification
+    from .outage import Outage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facilities (
@@ -113,6 +115,42 @@ CREATE TABLE IF NOT EXISTS justifications (
     deadline      TEXT NOT NULL,
     sent_at       TEXT,
     recipient     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS outages (
+    id                TEXT PRIMARY KEY,
+    facility_id       TEXT NOT NULL DEFAULT '',
+    started_at        TEXT NOT NULL,
+    restored_at       TEXT,
+    notice_subject    TEXT NOT NULL DEFAULT '',
+    notice_body       TEXT NOT NULL DEFAULT '',
+    notice_created_at TEXT,
+    notice_sent_at    TEXT,
+    notice_breach_at  TEXT,
+    restore_subject   TEXT NOT NULL DEFAULT '',
+    restore_body      TEXT NOT NULL DEFAULT '',
+    restore_created_at TEXT,
+    restore_sent_at   TEXT,
+    report_csv        TEXT NOT NULL DEFAULT '',
+    report_path       TEXT NOT NULL DEFAULT '',
+    report_rows       INTEGER NOT NULL DEFAULT 0,
+    report_created_at TEXT,
+    report_sent_at    TEXT,
+    report_breach_at  TEXT,
+    created_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dispensations (
+    id            TEXT PRIMARY KEY,
+    facility_id   TEXT NOT NULL DEFAULT '',
+    dispensed_at  TEXT NOT NULL,
+    patient_id    TEXT NOT NULL,
+    inventory_id  TEXT NOT NULL,
+    weight        TEXT NOT NULL,
+    unit          TEXT NOT NULL DEFAULT 'g',
+    location      TEXT NOT NULL DEFAULT '',
+    sale_id       TEXT NOT NULL DEFAULT '',
+    mmur_verified INTEGER NOT NULL DEFAULT 0,
+    outage_id     TEXT,
+    created_at    TEXT NOT NULL
 );
 """
 
@@ -494,6 +532,283 @@ class Workspace:
             id=row["id"], amendment_id=row["amendment_id"], subject=row["subject"], body=row["body"],
             created_at=datetime.fromisoformat(row["created_at"]), deadline=datetime.fromisoformat(row["deadline"]),
             sent_at=datetime.fromisoformat(row["sent_at"]) if row["sent_at"] else None, recipient=row["recipient"],
+        )
+
+    # -- disconnections (S3) -------------------------------------------------
+
+    def start_outage(self, when: datetime | None = None) -> "Outage":
+        from .outage import Outage, new_id
+
+        when = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        existing = self.open_outage()
+        if existing:
+            raise ValueError(f"an outage is already open ({existing.id}); restore it first")
+        facility = self.facility()
+        outage = Outage(id=new_id("out"), facility_id=facility.id if facility else "", started_at=when)
+        self.conn.execute(
+            "INSERT INTO outages (id,facility_id,started_at,created_at) VALUES (?,?,?,?)",
+            (outage.id, outage.facility_id, when.isoformat(), _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "disconnect_start",
+            {"outage": outage.id, "facility_location": outage.facility_id, "started_at": when.isoformat()},
+            when,
+            facility_id=outage.facility_id or None,
+        )
+        return outage
+
+    def restore_outage(self, outage_id: str | None = None, when: datetime | None = None) -> "Outage":
+        """Close the outage. The restoration notice and the outage CSV are generated at once."""
+        from .outage import new_id  # noqa: F401  (kept for symmetry with start_outage)
+
+        outage = self.outage(outage_id) if outage_id else self.open_outage()
+        if outage is None:
+            raise ValueError("no outage to restore")
+        if not outage.open:
+            raise ValueError(f"outage {outage.id} was already restored")
+        when = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if when < outage.started_at:
+            raise ValueError("restoration cannot precede the disconnection")
+        self.conn.execute("UPDATE outages SET restored_at = ? WHERE id = ?", (when.isoformat(), outage.id))
+        self.conn.commit()
+        self.ledger.append(
+            "disconnect_restored",
+            {"outage": outage.id, "restored_at": when.isoformat(), "duration_minutes": int((when - outage.started_at).total_seconds() // 60)},
+            when,
+            facility_id=outage.facility_id or None,
+        )
+        self.watch(now=when)
+        return self.outage(outage.id)
+
+    def record_dispensation(
+        self,
+        *,
+        patient_id: str,
+        inventory_id: str,
+        weight,
+        unit: str = "g",
+        location: str = "",
+        when: datetime | None = None,
+        mmur_verified: bool = False,
+        sale_id: str = "",
+    ) -> dict:
+        """Record one dispensation, and refuse it if an outage is open without MMUR verification.
+
+        Rule 64-4.222(2)(a): during a disconnection, dispensing requires verifiable active
+        status, current physician certification and remaining supply in the MMUR. If the
+        registry is unavailable, do not dispense. This is the one place the rule is
+        enforced rather than warned about.
+        """
+        when = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if not patient_id:
+            raise ValueError("a dispensation needs the patient's MMUR number")
+        if not inventory_id:
+            raise ValueError("a dispensation needs the department seed-to-sale inventory identification number")
+        outage = self.open_outage(at=when)
+        if outage and not mmur_verified:
+            raise ValueError(
+                f"outage {outage.id} is open: dispensing requires MMUR verification of active status, "
+                "current physician certification and remaining supply (Rule 64-4.222(2)(a)); "
+                "if the registry is unavailable, do not dispense"
+            )
+        if not location:
+            facility = self.facility()
+            location = facility.name if facility else ""
+        rid = f"dsp-{uuid.uuid4().hex[:10]}"
+        self.conn.execute(
+            "INSERT INTO dispensations (id,facility_id,dispensed_at,patient_id,inventory_id,weight,unit,"
+            "location,sale_id,mmur_verified,outage_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid, outage.facility_id if outage else "", when.isoformat(), patient_id, inventory_id,
+                str(Decimal(str(weight))), unit, location, sale_id, int(bool(mmur_verified)),
+                outage.id if outage else None, _now(),
+            ),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "dispensation",
+            {
+                "sale_id": sale_id or rid,
+                "item_id": inventory_id,
+                "patient_mmurnumber": patient_id,
+                "unit_count": str(Decimal(str(weight))),
+                "unit": unit,
+                "dispensing_facility_location": location,
+                "mmur_verified": bool(mmur_verified),
+                "during_outage": outage.id if outage else None,
+            },
+            when,
+            facility_id=(outage.facility_id if outage else None),
+        )
+        return {
+            "id": rid, "dispensed_at": when, "patient_id": patient_id, "inventory_id": inventory_id,
+            "weight": str(Decimal(str(weight))), "unit": unit, "location": location,
+            "mmur_verified": bool(mmur_verified), "outage_id": outage.id if outage else None,
+        }
+
+    def outages(self) -> list:
+        rows = self.conn.execute("SELECT * FROM outages ORDER BY started_at")
+        return [self._outage_from_row(r) for r in rows]
+
+    def outage(self, outage_id: str):
+        row = self.conn.execute("SELECT * FROM outages WHERE id = ?", (outage_id,)).fetchone()
+        return self._outage_from_row(row) if row else None
+
+    def open_outage(self, at: datetime | None = None):
+        for o in self.outages():
+            if o.open:
+                return o
+        return None
+
+    def dispensations(self, outage_id: str | None = None) -> list[dict]:
+        if outage_id:
+            outage = self.outage(outage_id)
+            if not outage:
+                raise ValueError(f"no outage {outage_id!r}")
+            end = outage.restored_at or datetime.now(timezone.utc)
+            rows = self.conn.execute(
+                "SELECT * FROM dispensations WHERE dispensed_at >= ? AND dispensed_at <= ? ORDER BY dispensed_at",
+                (outage.started_at.isoformat(), end.isoformat()),
+            )
+        else:
+            rows = self.conn.execute("SELECT * FROM dispensations ORDER BY dispensed_at")
+        return [
+            {
+                "id": r["id"], "dispensed_at": datetime.fromisoformat(r["dispensed_at"]),
+                "patient_id": r["patient_id"], "inventory_id": r["inventory_id"],
+                "weight": r["weight"], "unit": r["unit"], "location": r["location"],
+                "mmur_verified": bool(r["mmur_verified"]), "outage_id": r["outage_id"],
+            }
+            for r in rows
+        ]
+
+    def watch(self, now: datetime | None = None) -> list[str]:
+        """One unattended tick: draft what the clock says is due, and write the artifacts.
+
+        Called by `coontie watch`, and automatically on restoration. No arguments beyond the
+        clock, so a cron job or a service manager can run it forever.
+        """
+        from .outage import notice_draft, render_dispensations_csv, restoration_draft
+
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        actions: list[str] = []
+        facility = self.facility()
+        name = facility.name if facility else ""
+        license_number = facility.license_number if facility else ""
+
+        for outage in self.outages():
+            count = len(self.dispensations(outage.id))
+
+            if outage.notice_is_due(now):
+                subject, body = notice_draft(
+                    outage, mmtc_name=name, license_number=license_number, dispensations=count, now=now
+                )
+                self.conn.execute(
+                    "UPDATE outages SET notice_subject=?, notice_body=?, notice_created_at=? WHERE id=?",
+                    (subject, body, now.isoformat(), outage.id),
+                )
+                self.conn.commit()
+                path = self._write_artifact(outage.id, "notice", subject, body)
+                self.ledger.append(
+                    "disconnect_notice",
+                    {"outage": outage.id, "subject": subject, "dispensations_during_outage": count, "artifact": str(path)},
+                    now,
+                    facility_id=outage.facility_id or None,
+                )
+                actions.append(f"drafted disconnection notice {outage.id}: {path}")
+
+            fresh = self.outage(outage.id)
+            assert fresh is not None
+            if fresh.open and not fresh.notice_sent_at and not fresh.notice_breach_at and now > fresh.notice_deadline:
+                self.conn.execute("UPDATE outages SET notice_breach_at=? WHERE id=?", (now.isoformat(), fresh.id))
+                self.conn.commit()
+                actions.append(
+                    f"BREACH: notice for {fresh.id} was due {fresh.notice_deadline.isoformat()} and is still unsent"
+                )
+
+            if fresh.restored_at and not fresh.restore_created_at:
+                subject, body = restoration_draft(
+                    fresh, mmtc_name=name, license_number=license_number, dispensations=count
+                )
+                rows = self.dispensations(fresh.id)
+                csv_text = render_dispensations_csv(rows)
+                self.conn.execute(
+                    "UPDATE outages SET restore_subject=?, restore_body=?, restore_created_at=?, report_csv=?, "
+                    "report_rows=?, report_created_at=? WHERE id=?",
+                    (subject, body, now.isoformat(), csv_text, len(rows), now.isoformat(), fresh.id),
+                )
+                self.conn.commit()
+                notice_path = self._write_artifact(fresh.id, "restoration", subject, body)
+                csv_path = self._write_artifact(fresh.id, "dispensations", None, csv_text, suffix=".csv")
+                self.conn.execute("UPDATE outages SET report_path=? WHERE id=?", (str(csv_path), fresh.id))
+                self.conn.commit()
+                self.ledger.append(
+                    "outage_report",
+                    {
+                        "outage": fresh.id, "dispensations": len(rows),
+                        "restoration_artifact": str(notice_path), "csv_artifact": str(csv_path),
+                    },
+                    now,
+                    facility_id=fresh.facility_id or None,
+                )
+                actions.append(
+                    f"restored {fresh.id}: drafted restoration notice {notice_path} and outage CSV {csv_path} ({len(rows)} dispensations)"
+                )
+
+            fresh = self.outage(outage.id)
+            assert fresh is not None
+            if (
+                fresh.restored_at
+                and not fresh.report_sent_at
+                and not fresh.report_breach_at
+                and fresh.report_deadline
+                and now > fresh.report_deadline
+            ):
+                self.conn.execute("UPDATE outages SET report_breach_at=? WHERE id=?", (now.isoformat(), fresh.id))
+                self.conn.commit()
+                actions.append(
+                    f"BREACH: outage CSV for {fresh.id} was due {fresh.report_deadline.isoformat()} and is still unsent"
+                )
+        return actions
+
+    def send_outage(self, outage_id: str, what: str, when: datetime | None = None):
+        from .compliance import DEPT_EMAIL
+
+        when = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        column = {"notice": "notice_sent_at", "restoration": "restore_sent_at", "report": "report_sent_at"}.get(what)
+        if not column:
+            raise ValueError("what must be one of: notice, restoration, report")
+        cur = self.conn.execute(f"UPDATE outages SET {column} = ? WHERE id = ?", (when.isoformat(), outage_id))
+        if cur.rowcount == 0:
+            raise ValueError(f"no outage {outage_id!r}")
+        self.conn.commit()
+        return DEPT_EMAIL
+
+    def _write_artifact(self, outage_id: str, kind: str, subject: str | None, body: str, suffix: str = ".txt") -> Path:
+        directory = Path(self.path).resolve().parent / "reports"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"outage-{outage_id}-{kind}{suffix}"
+        text = body if subject is None else f"{subject}\n\n{body}\n"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _outage_from_row(self, row):
+        from .outage import Outage
+
+        def _dt(v):
+            return datetime.fromisoformat(v) if v else None
+
+        return Outage(
+            id=row["id"], facility_id=row["facility_id"], started_at=datetime.fromisoformat(row["started_at"]),
+            restored_at=_dt(row["restored_at"]), notice_subject=row["notice_subject"], notice_body=row["notice_body"],
+            notice_created_at=_dt(row["notice_created_at"]), notice_sent_at=_dt(row["notice_sent_at"]),
+            notice_breach_at=_dt(row["notice_breach_at"]), restore_subject=row["restore_subject"],
+            restore_body=row["restore_body"], restore_created_at=_dt(row["restore_created_at"]),
+            restore_sent_at=_dt(row["restore_sent_at"]), report_csv=row["report_csv"],
+            report_path=row["report_path"], report_rows=row["report_rows"],
+            report_created_at=_dt(row["report_created_at"]), report_sent_at=_dt(row["report_sent_at"]),
+            report_breach_at=_dt(row["report_breach_at"]),
         )
 
     # -- reads ---------------------------------------------------------------

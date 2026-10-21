@@ -42,9 +42,10 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/workspace.py` | The SQLite workspace: facility, rooms, products, lots, and the ledger beside them |
 | `src/coontie/importer.py` | Forgiving CSV import from an incumbent, with a per-row report and idempotent product matching |
 | `src/coontie/amendments.py` | Corrections with causes; the 64-4.222(12) notice drafted from the amendment |
+| `src/coontie/outage.py` | The disconnection clock, the notice and restoration drafts, and the outage CSV |
 | `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
 | `src/coontie/forms.py` | The DH5058 inventory list, with the form's exact columns and enumerations |
-| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `verify` |
+| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `outage`, `watch`, `dispense`, `verify` |
 | `docs/forms/dh5058.md` | The form's field list and what Coontie does with each field |
 | `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
 | `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
@@ -105,6 +106,41 @@ Nothing is deleted. The original quantity stays in the ledger, the amendment is 
 with its cause and who made it, and a non-exempt change drafts the written justification
 the department requires within 12 hours, addressed to
 `ommu_seedtosale@flhealth.gov` and citing Rule 64-4.222(12).
+
+## When the connection drops
+
+```bash
+# the moment the Department STS link goes down
+python3 -m coontie.cli --db ws.sqlite3 outage --start
+
+# from here on, one unattended tick is all that is needed.
+# run it from cron every few minutes, or leave it running:
+python3 -m coontie.cli --db ws.sqlite3 watch --every 300
+
+# past two hours the notice writes itself to reports/
+# past three hours unsent, the ledger records the miss
+python3 -m coontie.cli --db ws.sqlite3 outage --show
+python3 -m coontie.cli --db ws.sqlite3 outage --send notice
+
+# the moment it comes back
+python3 -m coontie.cli --db ws.sqlite3 outage --restore
+# -> restoration notice + itemized CSV of the dispensations during the outage
+python3 -m coontie.cli --db ws.sqlite3 outage --send restoration
+python3 -m coontie.cli --db ws.sqlite3 outage --send report
+```
+
+The rule's clock is the product's job: 2 hours to the notice threshold, 3 hours to the
+notice deadline, 24 hours from restoration to the CSV. Nothing is remembered by a person.
+
+Dispensing during an outage is refused unless the registry was checked first:
+
+```bash
+python3 -m coontie.cli --db ws.sqlite3 dispense --patient MMUR-1 \
+  --inventory FL-INV-001 --weight 3.5 --mmur-verified
+```
+
+Without `--mmur-verified`, the command exits with the citation rather than recording a
+dispensation the rule prohibits (64-4.222(2)(a)).
 
 ## Develop
 

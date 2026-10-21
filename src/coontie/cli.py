@@ -300,6 +300,116 @@ def cmd_alerts(args) -> int:
     return 0
 
 
+def _now_arg(value: str | None):
+    from datetime import datetime, timezone
+
+    if not value:
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    dt = datetime.fromisoformat(text)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def cmd_outage(args) -> int:
+    ws = _ws(args)
+    when = _now_arg(args.at)
+    try:
+        if args.start:
+            outage = ws.start_outage(when=when)
+            print(f"outage {outage.id} open since {outage.started_at.isoformat()}")
+            print(f"notice threshold: 2h ({outage.started_at.isoformat()} + 2h); notice deadline: {outage.notice_deadline.isoformat()} (3h)")
+            print("run `coontie watch` and the notice drafts itself once two hours have passed")
+        elif args.restore:
+            outage = ws.restore_outage(args.id, when=when)
+            print(f"outage {outage.id} restored at {outage.restored_at.isoformat()}")
+            print(f"restoration notice: {outage.restore_subject or '(none)'}")
+            print(f"outage CSV: {outage.report_path or '(none)'} ({outage.report_rows} dispensations)")
+            print(f"report deadline: {outage.report_deadline.isoformat()} (24 hours after restoration)")
+        elif args.send:
+            open_outage = ws.open_outage()
+            outage_id = args.id or (open_outage.id if open_outage else None)
+            if not outage_id:
+                sys.exit("give --id: no outage is open")
+            recipient = ws.send_outage(outage_id, args.send, when=when)
+            print(f"marked {args.send} sent to {recipient}")
+        elif args.show:
+            from datetime import datetime, timezone
+
+            now = when or datetime.now(timezone.utc)
+            outage = ws.outage(args.id) if args.id else ws.open_outage()
+            if not outage:
+                sys.exit("no outage to show")
+            print(f"outage {outage.id}  facility {outage.facility_id}")
+            print(f"  started:  {outage.started_at.isoformat()}")
+            print(f"  restored: {outage.restored_at.isoformat() if outage.restored_at else '(still open)'}")
+            print(f"  duration: {outage.elapsed(now)}")
+            print(f"  notice:   {outage.notice_status(now):<14} deadline {outage.notice_deadline.isoformat()}")
+            print(f"  report:   {outage.report_status(now):<14} deadline {outage.report_deadline.isoformat() if outage.report_deadline else '-'}")
+            print(f"  rows:     {outage.report_rows} dispensations during the outage")
+            if outage.notice_body:
+                print(f"  notice file: {outage.notice_subject}")
+            if outage.report_path:
+                print(f"  csv:      {outage.report_path}")
+        else:
+            rows = ws.outages()
+            if not rows:
+                print("no outages recorded")
+            for o in rows:
+                state = "open" if o.open else "restored"
+                print(f"{o.id}  {state:<9} started {o.started_at.isoformat()}  notice {o.notice_status()}  report {o.report_status()}  rows {o.report_rows}")
+    except ValueError as exc:
+        sys.exit(str(exc))
+    ws.close()
+    return 0
+
+
+def cmd_watch(args) -> int:
+    import time
+
+    ws = _ws(args)
+    when = _now_arg(args.at)
+    ticks = 0
+    try:
+        while True:
+            actions = ws.watch(now=when)
+            ticks += 1
+            for line in actions:
+                print(line)
+            if not args.every:
+                if not actions:
+                    print("nothing due")
+                break
+            time.sleep(args.every)
+    except KeyboardInterrupt:
+        print(f"stopped after {ticks} tick(s)")
+    finally:
+        ws.close()
+    return 0
+
+
+def cmd_dispense(args) -> int:
+    ws = _ws(args)
+    try:
+        d = ws.record_dispensation(
+            patient_id=args.patient,
+            inventory_id=args.inventory,
+            weight=args.weight,
+            unit=args.unit,
+            location=args.location or "",
+            when=_now_arg(args.at),
+            mmur_verified=args.mmur_verified,
+            sale_id=args.sale or "",
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    flag = "MMUR verified" if d["mmur_verified"] else "no outage open"
+    print(f"{d['id']}  {d['dispensed_at'].isoformat()}  patient {d['patient_id']}  {d['weight']} {d['unit']}  {flag}")
+    if d["outage_id"]:
+        print(f"recorded during outage {d['outage_id']}; it will appear in the outage CSV")
+    ws.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -386,6 +496,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     alr = _db(sub.add_parser("alerts", help="the guardrails: what is wrong right now"))
     alr.set_defaults(func=cmd_alerts)
+
+    out = _db(sub.add_parser("outage", help="record a disconnection, restore it, inspect it"))
+    what = out.add_mutually_exclusive_group()
+    what.add_argument("--start", action="store_true", help="record that the Department STS connection dropped")
+    what.add_argument("--restore", action="store_true", help="record that the connection came back")
+    what.add_argument("--show", action="store_true", help="state of one outage (or the open one)")
+    what.add_argument("--send", choices=["notice", "restoration", "report"], help="mark one artifact sent")
+    out.add_argument("--id", help="outage id (defaults to the open one)")
+    out.add_argument("--at", help="ISO timestamp, for simulation and back-entry")
+    out.set_defaults(func=cmd_outage)
+
+    wat = _db(sub.add_parser("watch", help="one unattended tick: draft whatever the clock says is due"))
+    wat.add_argument("--once", action="store_true", help="deprecated; one tick is the default")
+    wat.add_argument("--every", type=int, metavar="SECONDS", help="keep ticking every N seconds")
+    wat.add_argument("--at", help="ISO timestamp, for simulation")
+    wat.set_defaults(func=cmd_watch)
+
+    dsp = _db(sub.add_parser("dispense", help="record a dispensation"))
+    dsp.add_argument("--patient", required=True, help="patient MMUR number")
+    dsp.add_argument("--inventory", required=True, help="department seed-to-sale inventory identification number")
+    dsp.add_argument("--weight", required=True)
+    dsp.add_argument("--unit", default="g")
+    dsp.add_argument("--location", help="dispensing facility location")
+    dsp.add_argument("--sale", help="MMTC sale id")
+    dsp.add_argument("--mmur-verified", action="store_true", help="registry checked before dispensing")
+    dsp.add_argument("--at", help="ISO timestamp, for simulation")
+    dsp.set_defaults(func=cmd_dispense)
     return p
 
 
