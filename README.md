@@ -36,7 +36,11 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/events.py` | The 33 event types from Form DH5059-OMMU-05/2026, each with its fields, its timing (12 h or real time), and its citation |
 | `src/coontie/compliance.py` | 22 executable rules citing 64-4.221, 64-4.222, and DH5059. Each check returns a `Finding` with a citation |
 | `src/coontie/model.py` | The entities the record set forces into existence: facility, room, batch, plant, lot, final product, dispensation, manifest, adjustment |
+| `src/coontie/guardrails.py` | The failures that get missed, as countable alerts with citations: held lots, expiring product, unjustified adjustments, the disconnect clock, stale locations |
+| `src/coontie/drift.py` | Comparison of our record against the state's copy, with every difference classified |
 | `src/coontie/store.py` | Append-only, hash-chained event ledger with native CSV export and tamper detection |
+| `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
+| `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
 | `docs/requirements/` | Requirement matrices for 64-4.221 and 64-4.222, plus the generated DH5059 event catalog |
 | `docs/sources.md` | Every primary document, where it was fetched, and what is deliberately not used |
 

@@ -16,14 +16,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import NewType
 
-FacilityId = NewType("FacilityId", str)
-RoomId = NewType("RoomId", str)
-LotId = NewType("LotId", str)
-PlantId = NewType("PlantId", str)
-ProductId = NewType("ProductId", str)
-UniqueProductId = NewType("UniqueProductId", str)
+FacilityId = str
+RoomId = str
+LotId = str
+PlantId = str
+ProductId = str
+UniqueProductId = str
 
 
 class Route(str, Enum):
@@ -98,6 +97,7 @@ class Lot:
     room_id: RoomId
     source_lot_id: LotId | None = None
     harvest_batch_ids: tuple[str, ...] = ()
+    on_hold: bool = False
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:

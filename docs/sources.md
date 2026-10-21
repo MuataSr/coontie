@@ -12,6 +12,8 @@ description of a rule.
 | s. 381.986, F.S. (2025) | `https://www.flsenate.gov/Laws/statutes/2025/381.986` | For the enabling statute and the (8)(d)/(8)(e)/(8)(g) obligations |
 | BioTrack API access process and approved integrator list | `https://biotrack.com/legislation/florida/` | The department's STS vendor states API credentials require naming the MMTC or CMTL you integrate for |
 | The coontie and the atala butterfly (project name) | `https://www.floridamuseum.ufl.edu/earth-systems/blog/a-butterfly-on-the-move-the-atala-butterfly-and-its-coontie-connection/` | Read for the name's story: coontie as the atala host plant, commercial Florida Arrowroot harvesting outrunning the cycad, the butterfly believed extinct in the 1940s, and recovery after replanting |
+| OMMU Rules Workshop transcripts, 2025-10-28 and 2025-10-29 | `https://knowthefactsmmj.com/wp-content/uploads/Transcripts/` (media library) | Downloaded and read in full. The October 29 session is the operator testimony on 64-4.221 and 64-4.222: named compliance staff from Trulieve, Surterra, Curaleaf, AYR, The Flowery, INSA, Sunburn, plus Baxter Law and the Florida Cannabis Action Network |
+| Operator complaint corpus | Reddit via the PullPush archive API (`https://api.pullpush.io/reddit/search/comment/`), 393 substantive comments from four full threads plus keyword sweeps | Reddit itself returns 403 from this network on every route; the archive API is the working path. Distilled in `docs/research/PAIN-POINTS-2026-10-21.md` |
 
 ## What is deliberately not used
 

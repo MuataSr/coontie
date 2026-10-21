@@ -27,6 +27,15 @@ Rulings by Mister K, recorded so no later session re-litigates them.
    product in this line gets a Florida native plant name, not a coined tech word.
    The package is `coontie`, the copyright holder line is "The Coontie Authors", and
    the story behind the plant lives in `README.md`.
+10. **The product spec is derived from operator pain research, not from vendor
+    feature lists.** `docs/PRODUCT-SPEC.md` is the authority for what gets built, and
+    `docs/research/PAIN-POINTS-2026-10-21.md` is its evidence. Three consequences are
+    now structural: **corrections are the centre of the product**, **drift against the
+    state record is a first-class surface**, and **guardrails are countable items on
+    the main screen**. E-commerce, menus, loyalty, payments and recommendation engines
+    are refused permanently, because the research says those are the parts that break.
+11. **Model identifiers are plain string aliases, not NewType.** The type checker
+    fights every literal in a test and buys nothing at runtime in a dataclass skeleton.
 
 ## Open
 
