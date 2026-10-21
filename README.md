@@ -280,6 +280,42 @@ Refused in the write path, not warned about:
 - **a receipt that does not add up**: dispatched 200, received 198, rejected 0 leaves 2
   unaccounted, and the record refuses to pretend otherwise
 
+## The inspection simulator
+
+The feature no vendor sells: what the department would find if it walked in today.
+
+```bash
+python3 -m coontie.cli --db ws.sqlite3 audit
+python3 -m coontie.cli --db ws.sqlite3 audit --json
+python3 -m coontie.cli --db ws.sqlite3 audit --strict   # exit 1 if anything is a breach
+```
+
+Every finding is a row in your own record that contradicts a rule, carrying the citation and the
+identifier of the thing found: corrections with no written justification, justifications drafted
+but never sent, notices later than the deadline, disposals inside the 72-hour wait, harvests with
+no schedule, expired product still shown as available, manifests that left with no receipt, lots
+whose moves are in a different unit than the lot, and a ledger that does not verify.
+
+It closes with what it **cannot** check (department transmission, MMUR status, observed physical
+security), because a clean report that implies more than it can prove is worse than no report.
+
+## Saying it instead of clicking it
+
+`assist.py` reads a sentence as the command it means, resolves names against the record, prints
+the command it would run, and runs nothing.
+
+```text
+"send 200 g blue dream to tampa with maria and dev"
+  -> coontie manifest --recipient "tampa" --item stk-77ce050301:200 --employees "Maria Lopez;Dev Patel" ...
+
+"move the nightshade gummies from inv1 to inv2"
+  -> coontie split --lot stk-6ca1f059ca --to INV2   (and: no quantity stated)
+```
+
+The same module reads a pasted lab COA or invoice into the fields we store, and reports what it
+could not find rather than guessing. Both are deterministic, both are tested for giving the same
+answer twice, and neither can write to the record.
+
 ## Develop
 
 ```bash

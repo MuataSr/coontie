@@ -2050,13 +2050,9 @@ class Workspace:
         facility = self.facility()
         at = at or utcnow()
         parsed = [(n, to_amount(a), u) for n, a, u in zip(names, amounts, units)]
-        self.conn.execute(
-            "INSERT INTO stock_moves (id,lot_id,kind,amount,unit,target_lot_id,note,at,created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (f"ing-{uuid.uuid4().hex[:10]}", lot.id, "ingredient", "0", units[0],
-             "", "; ".join(f"{n} {a}{u}" for n, a, u in parsed), at.isoformat(), _now()),
-        )
-        self.conn.commit()
+        # Ingredients are added, not taken: no stock move, no change to the lot's balance. The
+        # ledger event carries the department's fields; a move here would report a gram lot as
+        # having millilitre movements and the balance check would stop meaning anything.
         self.ledger.append(
             "ingredient_add",
             {

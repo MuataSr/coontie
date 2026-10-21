@@ -935,6 +935,34 @@ def cmd_invoice(args) -> int:
     return 0
 
 
+def cmd_audit(args) -> int:
+    """The inspection simulator: what the department would find today."""
+    import json as _json
+
+    from .inspect import BREACH, CANNOT_CHECK, EXPOSURE, NOTE, as_dict, inspect, summarize
+
+    ws = _ws(args)
+    findings = inspect(ws, now=_now_arg(args.at))
+    if args.json:
+        print(_json.dumps(as_dict(findings), indent=2))
+    else:
+        counts = summarize(findings)
+        print(f"Coontie inspection: {counts[BREACH]} breach(es), {counts[EXPOSURE]} exposure(s), "
+              f"{counts[NOTE]} note(s)")
+        if not findings:
+            print("Nothing found. That is not a guarantee: see what this system cannot check.")
+        for f in findings:
+            print("  " + f.line())
+            if f.detail:
+                print(f"            {f.detail}")
+        print()
+        print("What this cannot check")
+        for c in CANNOT_CHECK:
+            print(f"  - {c.area}: {c.why}")
+    ws.close()
+    return 1 if (args.strict and any(f.severity == BREACH for f in findings)) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -1222,6 +1250,12 @@ def build_parser() -> argparse.ArgumentParser:
     invc.add_argument("--unit", default="g")
     invc.add_argument("--at")
     invc.set_defaults(func=cmd_invoice)
+
+    aud = _db(sub.add_parser("audit", help="what the department would find today"))
+    aud.add_argument("--json", action="store_true", help="machine-readable findings")
+    aud.add_argument("--strict", action="store_true", help="exit 1 if anything is a breach")
+    aud.add_argument("--at", help="treat this moment as now (ISO)")
+    aud.set_defaults(func=cmd_audit)
 
     out = _db(sub.add_parser("outage", help="record a disconnection, restore it, inspect it"))
     what = out.add_mutually_exclusive_group()
