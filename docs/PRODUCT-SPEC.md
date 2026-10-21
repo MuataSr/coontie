@@ -179,6 +179,7 @@ gate is green.
 | S6 | Processing module | **PASSED 2026-10-21**: `tests/test_s6_gate.py` runs harvest to final product and accounts for every gram (600 out: 200 split, 300 converted, 5 sampled, 94.5 packaged, 0.5 corrected), refuses a conversion that returns more than it consumed, refuses a changed expiration with the word immutable, and checks all eight processing payloads against the DH5059 catalog |
 | S7 | Transport module | Manifests generated from the record and accepted by the transfer flow |
 | S8 | Dispensing | Blocked until MMUR access is answered (see open questions) |
+| S9 | Deterministic assistance review | A written inventory of the places where plain Python can carry the "it understands me" feel without a model: fuzzy input matching, nearest-value suggestions in refusals, statistical anomaly flags, FTS5 search over the ledger, next-action assembly. Every one must be reproducible from the record alone, with a test proving the same input gives the same answer twice |
 
 ## 10. Open questions that gate work
 
