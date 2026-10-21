@@ -96,6 +96,19 @@ def compare(ours: dict, theirs: dict, *, quantity_tolerance: Decimal | str = "0"
             continue
 
         qa, qb = a[key].get("quantity"), b[key].get("quantity")
+        ua, ub = a[key].get("unit"), b[key].get("unit")
+        if ua is not None and ub is not None and ua != ub:
+            # Numbers in different units are not comparable; say so rather than subtract.
+            items.append(
+                DriftItem(
+                    Drift.QUANTITY_MISMATCH,
+                    key,
+                    ours=a[key],
+                    theirs=b[key],
+                    note=f"units differ: {ua} vs {ub}",
+                )
+            )
+            continue
         if qa is not None and qb is not None:
             try:
                 if abs(Decimal(str(qa)) - Decimal(str(qb))) > tol:

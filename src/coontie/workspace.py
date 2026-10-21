@@ -14,6 +14,7 @@ Design notes, deliberately boring:
 from __future__ import annotations
 
 import uuid
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -152,6 +153,38 @@ CREATE TABLE IF NOT EXISTS dispensations (
     outage_id     TEXT,
     created_at    TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS state_snapshots (
+    id          TEXT PRIMARY KEY,
+    source_file TEXT NOT NULL DEFAULT '',
+    as_of       TEXT NOT NULL,
+    rows        INTEGER NOT NULL DEFAULT 0,
+    rejected    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS state_inventory (
+    snapshot_id       TEXT NOT NULL,
+    sts_inventory_id  TEXT NOT NULL,
+    product           TEXT NOT NULL DEFAULT '',
+    quantity          TEXT NOT NULL DEFAULT '0',
+    unit              TEXT NOT NULL DEFAULT 'units',
+    status            TEXT NOT NULL DEFAULT '',
+    room              TEXT NOT NULL DEFAULT '',
+    raw               TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (snapshot_id, sts_inventory_id)
+);
+CREATE TABLE IF NOT EXISTS drift_findings (
+    id             TEXT PRIMARY KEY,
+    snapshot_id    TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    record_key     TEXT NOT NULL,
+    ours           TEXT NOT NULL DEFAULT '',
+    theirs         TEXT NOT NULL DEFAULT '',
+    note           TEXT NOT NULL DEFAULT '',
+    resolution     TEXT,
+    resolution_note TEXT NOT NULL DEFAULT '',
+    resolved_at    TEXT,
+    created_at     TEXT NOT NULL
+);
 """
 
 
@@ -219,7 +252,22 @@ class Workspace:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        self._migrate()
         self.ledger = Ledger(self.path)
+
+    def _migrate(self) -> None:
+        """Additive migrations only: an operator's file is never rebuilt underneath them."""
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(lots)")}
+        if "sts_inventory_id" not in columns:
+            self.conn.execute("ALTER TABLE lots ADD COLUMN sts_inventory_id TEXT")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_lots_sts ON lots(sts_inventory_id)"
+            " WHERE sts_inventory_id IS NOT NULL"
+        )
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_key ON drift_findings(snapshot_id, kind, record_key)"
+        )
+        self.conn.commit()
 
     # -- setup ---------------------------------------------------------------
 
@@ -810,6 +858,295 @@ class Workspace:
             report_created_at=_dt(row["report_created_at"]), report_sent_at=_dt(row["report_sent_at"]),
             report_breach_at=_dt(row["report_breach_at"]),
         )
+
+    # -- drift (S4) ----------------------------------------------------------
+
+    def link_lot(self, lot_id: str, sts_inventory_id: str, when: datetime | None = None):
+        """Attach the department's inventory identification number to one of our lots."""
+        when = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        row = self.conn.execute("SELECT * FROM lots WHERE id = ?", (lot_id,)).fetchone()
+        if not row:
+            raise ValueError(f"no lot {lot_id!r}")
+        sts_inventory_id = sts_inventory_id.strip()
+        if not sts_inventory_id:
+            raise ValueError("the department inventory id cannot be empty")
+        clash = self.conn.execute(
+            "SELECT id FROM lots WHERE sts_inventory_id = ? AND id <> ?", (sts_inventory_id, lot_id)
+        ).fetchone()
+        if clash:
+            raise ValueError(f"{sts_inventory_id} is already linked to lot {clash['id']}")
+        self.conn.execute("UPDATE lots SET sts_inventory_id = ? WHERE id = ?", (sts_inventory_id, lot_id))
+        self.conn.commit()
+        self.ledger.append(
+            "sts_id_link", {"lot_id": lot_id, "sts_inventory_id": sts_inventory_id}, when
+        )
+        return lot_id
+
+    def unlinked_lots(self) -> list:
+        return [
+            _lot(r)
+            for r in self.conn.execute("SELECT * FROM lots WHERE sts_inventory_id IS NULL ORDER BY created_at")
+        ]
+
+    def pull_state(self, text: str, *, source_file: str = "", as_of: datetime | None = None):
+        """Store one snapshot of the department's copy. Returns (snapshot_id, rows, rejected)."""
+        from .driftfeed import parse_state_export
+        from .outage import new_id
+
+        parsed = parse_state_export(text)
+        if not parsed.rows:
+            reason = parsed.rejected[0][1] if parsed.rejected else "no usable rows"
+            raise ValueError(f"could not read the state export: {reason}")
+        as_of = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        sid = new_id("snp")
+        self.conn.execute(
+            "INSERT INTO state_snapshots (id,source_file,as_of,rows,rejected,created_at) VALUES (?,?,?,?,?,?)",
+            (sid, source_file, as_of.isoformat(), len(parsed.rows), len(parsed.rejected), _now()),
+        )
+        for r in parsed.rows:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO state_inventory"
+                " (snapshot_id,sts_inventory_id,product,quantity,unit,status,room,raw) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    sid, r.sts_inventory_id, r.product, str(r.quantity), r.unit, r.status, r.room,
+                    json.dumps(r.raw, sort_keys=True),
+                ),
+            )
+        self.conn.commit()
+        self.last_parsed = parsed
+        return sid, len(parsed.rows), len(parsed.rejected)
+
+    def latest_snapshot(self):
+        row = self.conn.execute("SELECT * FROM state_snapshots ORDER BY as_of DESC, created_at DESC LIMIT 1").fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"], "source_file": row["source_file"], "as_of": datetime.fromisoformat(row["as_of"]),
+            "rows": row["rows"], "rejected": row["rejected"],
+        }
+
+    def state_rows(self, snapshot_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM state_inventory WHERE snapshot_id = ? ORDER BY sts_inventory_id", (snapshot_id,)
+        )
+        return [
+            {
+                "sts_inventory_id": r["sts_inventory_id"], "product": r["product"], "quantity": r["quantity"],
+                "unit": r["unit"], "status": r["status"], "room": r["room"], "raw": json.loads(r["raw"] or "{}"),
+            }
+            for r in rows
+        ]
+
+    def compare_drift(self, snapshot_id: str | None = None, tolerance: str = "0.05"):
+        """Compare the day's records to one state snapshot and persist the differences."""
+        from . import drift as drift_mod
+        from .driftfeed import to_base
+        from .outage import new_id
+
+        snapshot = self.latest_snapshot() if snapshot_id is None else {"id": snapshot_id}
+        if snapshot is None:
+            raise ValueError("no state snapshot yet: run `coontie drift pull --csv <file>` first")
+        sid = snapshot["id"]
+
+        ours: dict[str, dict] = {}
+        for r in self.conn.execute(
+            "SELECT l.*, p.name AS product_name, r.name AS room_name, r.number AS room_number"
+            " FROM lots l JOIN products p ON p.id = l.product_id JOIN rooms r ON r.id = l.room_id"
+            " WHERE l.sts_inventory_id IS NOT NULL"
+        ):
+            quantity, base_unit = to_base(r["quantity"], r["unit"])
+            ours[r["sts_inventory_id"]] = {
+                "quantity": str(quantity), "unit": base_unit,
+                "status": "on_hold" if r["on_hold"] else "active",
+                "product": r["product_name"], "room": r["room_name"], "lot_id": r["id"],
+            }
+
+        theirs: dict[str, dict] = {}
+        for r in self.state_rows(sid):
+            quantity, base_unit = to_base(r["quantity"], r["unit"])
+            theirs[r["sts_inventory_id"]] = {
+                "quantity": str(quantity), "unit": base_unit, "status": r["status"],
+                "product": r["product"], "room": r["room"],
+            }
+
+        report = drift_mod.compare(ours, theirs, quantity_tolerance=tolerance)
+        for item in report.items:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO drift_findings"
+                " (id,snapshot_id,kind,record_key,ours,theirs,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    new_id("drf"), sid, item.kind.value, item.key,
+                    json.dumps(item.ours, sort_keys=True), json.dumps(item.theirs, sort_keys=True),
+                    item.note, _now(),
+                ),
+            )
+        self.conn.commit()
+        return report, self.drift_findings(sid, open_only=False)
+
+    def drift_findings(self, snapshot_id: str | None = None, open_only: bool = True) -> list[dict]:
+        if snapshot_id is None:
+            snapshot = self.latest_snapshot()
+            if not snapshot:
+                return []
+            snapshot_id = snapshot["id"]
+        sql = "SELECT * FROM drift_findings WHERE snapshot_id = ?"
+        if open_only:
+            sql += " AND resolution IS NULL"
+        sql += " ORDER BY kind, record_key"
+        out = []
+        for r in self.conn.execute(sql, (snapshot_id,)):
+            ours = json.loads(r["ours"] or "{}")
+            theirs = json.loads(r["theirs"] or "{}")
+            out.append(
+                {
+                    "id": r["id"], "snapshot_id": r["snapshot_id"], "kind": r["kind"],
+                    "record_key": r["record_key"], "ours": ours, "theirs": theirs, "note": r["note"],
+                    "resolution": r["resolution"], "resolution_note": r["resolution_note"],
+                    "resolved_at": r["resolved_at"],
+                }
+            )
+        return out
+
+    def finding(self, ref: str) -> dict | None:
+        for f in self.drift_findings(self.latest_snapshot()["id"] if self.latest_snapshot() else None, open_only=False):
+            if f["id"] == ref or f["id"].startswith(ref):
+                return f
+        return None
+
+    def resolve_finding(
+        self,
+        ref: str,
+        action: str,
+        *,
+        note: str = "",
+        quantity=None,
+        product: str | None = None,
+        room: str | None = None,
+        actor: str = "",
+        when: datetime | None = None,
+    ) -> dict:
+        """Resolve one difference. Every action is recorded; nothing is silently discarded."""
+        from .driftfeed import normalise_unit, to_base
+
+        when = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        finding = self.finding(ref)
+        if finding is None:
+            raise ValueError(f"no finding matching {ref!r}")
+        if finding["resolution"]:
+            raise ValueError(f"finding {finding['id']} is already resolved ({finding['resolution']})")
+        kind = finding["kind"]
+        key = finding["record_key"]
+        theirs = finding["theirs"]
+        ours = finding["ours"]
+        allowed = {
+            "quantity_mismatch": {"accept_state", "keep_local", "recount"},
+            "status_mismatch": {"accept_state", "keep_local"},
+            "missing_at_state": {"keep_local", "resend"},
+            "missing_locally": {"record_state", "keep_local"},
+        }[kind]
+        if action not in allowed:
+            raise ValueError(f"{action!r} does not apply to a {kind}; choose one of: {', '.join(sorted(allowed))}")
+
+        lot_row = self.conn.execute("SELECT * FROM lots WHERE sts_inventory_id = ?", (key,)).fetchone()
+        before = dict(ours)
+        after: dict = {}
+        reason = note or f"drift resolution against state snapshot {finding['snapshot_id']}"
+
+        if action == "accept_state":
+            if kind == "quantity_mismatch":
+                if normalise_unit(ours.get("unit", "")) != normalise_unit(theirs.get("unit", "")):
+                    raise ValueError(
+                        f"the two records are in different units ({ours.get('unit')} vs {theirs.get('unit')}); "
+                        "recount rather than accept"
+                    )
+                self.amend_lot(
+                    lot_row["id"], new_quantity=theirs["quantity"], cause="miscount",
+                    reason=f"aligned to the department's quantity: {reason}", actor=actor, when=when,
+                )
+                after = {"quantity": theirs["quantity"]}
+            else:
+                hold = theirs.get("status") == "on_hold"
+                self.amend_lot(
+                    lot_row["id"], new_on_hold=hold, cause="other",
+                    reason=f"aligned to the department's status {theirs.get('status')!r}: {reason}",
+                    actor=actor, when=when,
+                )
+                after = {"status": theirs.get("status")}
+
+        elif action == "recount":
+            if quantity is None:
+                raise ValueError("recount needs a counted quantity")
+            self.amend_lot(
+                lot_row["id"], new_quantity=quantity, cause="miscount",
+                reason=f"physical recount: {reason}", actor=actor, when=when,
+            )
+            after = {"quantity": str(Decimal(str(quantity)))}
+
+        elif action == "record_state":
+            count, base_unit = to_base(theirs.get("quantity", "0"), theirs.get("unit", "units"))
+            target_product = self._match_product(product or theirs.get("product", ""))
+            if target_product is None:
+                raise ValueError(
+                    f"no product matches {theirs.get('product')!r}; add it with `coontie product add` first"
+                )
+            target_room = self._match_room(room or theirs.get("room", ""))
+            if target_room is None:
+                raise ValueError(f"no room matches {theirs.get('room')!r}; give --room")
+            lot_id = f"lot-{uuid.uuid4().hex[:10]}"
+            self.conn.execute(
+                "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,sts_inventory_id,created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (lot_id, target_product["id"], target_room.id, str(count), base_unit,
+                 int(theirs.get("status") == "on_hold"), key, _now()),
+            )
+            self.conn.commit()
+            self.ledger.append(
+                "inventory_lot_create",
+                {
+                    "inventory": target_product["id"], "lot_id": lot_id, "weight_or_volume": str(count),
+                    "unit": base_unit, "room": target_room.id, "sts_inventory_id": key,
+                    "recovered_from_state_snapshot": finding["snapshot_id"],
+                },
+                when,
+            )
+            after = {"quantity": str(count), "unit": base_unit, "lot_id": lot_id}
+
+        elif action == "resend":
+            # Nothing changes locally; the generic drift_resolution entry below is the record.
+            after = {"resend": True}
+
+        self.conn.execute(
+            "UPDATE drift_findings SET resolution=?, resolution_note=?, resolved_at=? WHERE id=?",
+            (action, reason, when.isoformat(), finding["id"]),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "drift_resolution",
+            {
+                "snapshot": finding["snapshot_id"], "kind": kind, "record_key": key, "action": action,
+                "note": reason, "checked_at": finding["snapshot_id"],
+                "before": before, "after": after,
+            },
+            when,
+        )
+        return self.finding(finding["id"])
+
+    def _match_product(self, text: str):
+        if not text:
+            return None
+        row = self.conn.execute("SELECT * FROM products WHERE LOWER(name) = LOWER(?)", (text.strip(),)).fetchone()
+        if row:
+            return row
+        row = self.conn.execute("SELECT * FROM products WHERE upid = ?", (text.strip(),)).fetchone()
+        return row
+
+    def _match_room(self, text: str):
+        if text:
+            for r in self.rooms():
+                if text.strip().lower() in (r.name.lower(), r.number.lower(), f"{r.name} {r.number}".lower()):
+                    return r
+        rooms = [r for r in self.rooms() if r.kind == "inventory"]
+        return rooms[0] if rooms else None
 
     # -- reads ---------------------------------------------------------------
 

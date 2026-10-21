@@ -410,6 +410,79 @@ def cmd_dispense(args) -> int:
     return 0
 
 
+def cmd_link(args) -> int:
+    ws = _ws(args)
+    try:
+        ws.link_lot(args.lot, args.sts_id, when=_now_arg(args.at))
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{args.lot} linked to department inventory id {args.sts_id}")
+    ws.close()
+    return 0
+
+
+def cmd_drift(args) -> int:
+    ws = _ws(args)
+    action = args.drift_action
+    if action == "pull":
+        text = Path(args.csv).read_text(encoding="utf-8-sig")
+        try:
+            sid, rows, rejected = ws.pull_state(text, source_file=str(args.csv), as_of=_now_arg(args.as_of))
+        except ValueError as exc:
+            sys.exit(str(exc))
+        print(f"snapshot {sid}: {rows} record(s) from {args.csv}" + (f", {rejected} rejected" if rejected else ""))
+        parsed = getattr(ws, "last_parsed", None)
+        if parsed:
+            for line, reason in parsed.rejected:
+                print(f"  line {line}: {reason}")
+        print("next: coontie drift compare")
+    elif action == "compare":
+        try:
+            report, findings = ws.compare_drift(tolerance=args.tolerance)
+        except ValueError as exc:
+            sys.exit(str(exc))
+        print(report.summary())
+        unlinked = len(ws.unlinked_lots())
+        if unlinked:
+            print(f"{unlinked} lot(s) are unlinked and were not compared (coontie link --lot ... --sts-id ...)")
+        if report.items:
+            print("run `coontie drift serve` to work through them, or `coontie drift show` to read them here")
+    elif action == "show":
+        rows = ws.drift_findings(open_only=not args.all)
+        snapshot = ws.latest_snapshot()
+        if not snapshot:
+            sys.exit("no state snapshot yet: coontie drift pull --csv <file>")
+        print(f"snapshot {snapshot['id']}  {snapshot['as_of'].strftime('%Y-%m-%d %H:%M UTC')}  {snapshot['rows']} record(s)")
+        if not rows:
+            print("no open differences")
+        for f in rows:
+            ours = f["ours"] or {}
+            theirs = f["theirs"] or {}
+            print(
+                f"{f['id']}  {f['kind']:<18} {f['record_key']:<16} "
+                f"ours {ours.get('quantity', ours.get('status', '-'))} / theirs {theirs.get('quantity', theirs.get('status', '-'))}"
+                + (f"  resolved={f['resolution']}" if f["resolution"] else "")
+            )
+        print(f"{len(rows)} difference(s)")
+    elif action == "serve":
+        from .driftview import serve
+
+        serve(args.db, port=args.port)
+    elif action == "resolve":
+        try:
+            f = ws.resolve_finding(
+                args.ref, args.action, note=args.note or "", quantity=args.quantity,
+                product=args.product, room=args.room, actor=args.actor or "operator",
+            )
+        except ValueError as exc:
+            sys.exit(str(exc))
+        print(f"{f['id']}  {f['kind']}  resolved: {f['resolution']}")
+        if f["resolution_note"]:
+            print(f"  {f['resolution_note']}")
+    ws.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -523,6 +596,43 @@ def build_parser() -> argparse.ArgumentParser:
     dsp.add_argument("--mmur-verified", action="store_true", help="registry checked before dispensing")
     dsp.add_argument("--at", help="ISO timestamp, for simulation")
     dsp.set_defaults(func=cmd_dispense)
+
+    lnk = _db(sub.add_parser("link", help="attach the department inventory id to a lot"))
+    lnk.add_argument("--lot", required=True)
+    lnk.add_argument("--sts-id", required=True, dest="sts_id")
+    lnk.add_argument("--at", help="ISO timestamp, for back-entry")
+    lnk.set_defaults(func=cmd_link)
+
+    drf = _db(sub.add_parser("drift", help="compare our record with the state's copy"))
+    drift_sub = drf.add_subparsers(dest="drift_action", required=True)
+
+    d_pull = _db(drift_sub.add_parser("pull", help="store the department's export as a snapshot"))
+    d_pull.add_argument("--csv", required=True)
+    d_pull.add_argument("--as-of", help="when the export was taken")
+    d_pull.set_defaults(func=cmd_drift)
+
+    d_cmp = _db(drift_sub.add_parser("compare", help="classify every difference"))
+    d_cmp.add_argument("--tolerance", default="0.05", help="quantity difference treated as agreement (default 0.05)")
+    d_cmp.set_defaults(func=cmd_drift)
+
+    d_show = _db(drift_sub.add_parser("show", help="list the differences in the terminal"))
+    d_show.add_argument("--all", action="store_true", help="include resolved ones")
+    d_show.set_defaults(func=cmd_drift)
+
+    d_serve = _db(drift_sub.add_parser("serve", help="open the one-screen drift view on localhost"))
+    d_serve.add_argument("--port", type=int, default=8770)
+    d_serve.set_defaults(func=cmd_drift)
+
+    d_res = _db(drift_sub.add_parser("resolve", help="resolve one difference"))
+    d_res.add_argument("ref", help="finding id (prefix is enough)")
+    d_res.add_argument("--action", required=True,
+                       choices=["accept_state", "keep_local", "recount", "record_state", "resend"])
+    d_res.add_argument("--quantity", help="for recount")
+    d_res.add_argument("--note")
+    d_res.add_argument("--product", help="for record_state, if the name does not match")
+    d_res.add_argument("--room", help="for record_state, if the room does not match")
+    d_res.add_argument("--actor")
+    d_res.set_defaults(func=cmd_drift)
     return p
 
 

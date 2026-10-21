@@ -43,9 +43,11 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/importer.py` | Forgiving CSV import from an incumbent, with a per-row report and idempotent product matching |
 | `src/coontie/amendments.py` | Corrections with causes; the 64-4.222(12) notice drafted from the amendment |
 | `src/coontie/outage.py` | The disconnection clock, the notice and restoration drafts, and the outage CSV |
+| `src/coontie/driftfeed.py` | Reads the department's export through aliases; normalises statuses, units and quantities |
+| `src/coontie/driftview.py` | The one-screen drift page and its localhost server, standard library only |
 | `src/coontie/products.py` | Unique product IDs derived from the six attributes Rule 64-4.221(1)(c) groups on |
 | `src/coontie/forms.py` | The DH5058 inventory list, with the form's exact columns and enumerations |
-| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `outage`, `watch`, `dispense`, `verify` |
+| `src/coontie/cli.py` | `init`, `room`, `product`, `import`, `inventory`, `export dh5058`, `amend`, `justifications`, `justify`, `journal`, `alerts`, `outage`, `watch`, `dispense`, `link`, `drift`, `verify` |
 | `docs/forms/dh5058.md` | The form's field list and what Coontie does with each field |
 | `docs/PRODUCT-SPEC.md` | What gets built and why, derived from the rules plus operator pain research |
 | `docs/research/PAIN-POINTS-2026-10-21.md` | The evidence base: 393 operator comments and the OMMU hearing record |
@@ -141,6 +143,39 @@ python3 -m coontie.cli --db ws.sqlite3 dispense --patient MMUR-1 \
 
 Without `--mmur-verified`, the command exits with the citation rather than recording a
 dispensation the rule prohibits (64-4.222(2)(a)).
+
+## See the drift, and fix it on one screen
+
+```bash
+# 1. attach the department's inventory numbers to our lots (once)
+python3 -m coontie.cli --db ws.sqlite3 link --lot lot-abc123 --sts-id FL-INV-001
+
+# 2. store what the department says we hold
+python3 -m coontie.cli --db ws.sqlite3 drift pull --csv state-export.csv
+
+# 3. classify every difference
+python3 -m coontie.cli --db ws.sqlite3 drift compare
+#    -> 4 differences: 1 missing at state, 1 missing locally, 1 quantity mismatch, 1 status mismatch
+
+# 4. answer the question on one screen
+python3 -m coontie.cli --db ws.sqlite3 drift serve      # http://127.0.0.1:8770/
+
+# or work it from the terminal
+python3 -m coontie.cli --db ws.sqlite3 drift show
+python3 -m coontie.cli --db ws.sqlite3 drift resolve drf-cd3b --action accept_state
+python3 -m coontie.cli --db ws.sqlite3 drift resolve drf-49ff --action record_state
+```
+
+The screen is one page, standard library only, no JavaScript, localhost only. Each row
+shows the class of difference, both values, the rule it falls under, and buttons that
+resolve it: accept the state's number, keep ours, record a recount, record the missing
+lot, or re-send ours. The count at the top is the answer to "is my record the same as the
+state's".
+
+Quantities are normalised before comparison, so 60 g and 2.117 oz are **not** a difference;
+the rule's conversion is applied in one place (`compliance.ounces_to_grams`). An
+unrecognised status in the state's export is passed through rather than matched to the
+nearest thing, so it surfaces as a difference instead of hiding.
 
 ## Develop
 

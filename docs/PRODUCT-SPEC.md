@@ -157,7 +157,7 @@ lives with the operator. Export is a first-class action, not a feature flag.
 | Domain model | the entities the catalog forces | built |
 | First run | guided setup plus incumbent import | **built (S1)**: CLI first run, CSV import, DH5058 export |
 | Corrections | amend with cause and justification drafting | **built (S2)**: amend, justifications, justify, journal, alerts |
-| Drift | comparison against the state record | skeleton: compare and classify, no import or UI |
+| Drift | comparison against the state record | **built (S4)**: pull the department's export, classify, resolve on a one-screen page |
 | Guardrails | hold, expiry, adjustment, disconnect clock | **built (S3)**: the clock, the notice, the restoration notice, the outage CSV |
 | Cultivation | plants, harvests, waste, moves | to build |
 | Processing | lots, splits, conversions, final products, lab samples | to build |
@@ -174,7 +174,7 @@ gate is green.
 | S1 | First run plus import plus DH5058 export | **PASSED 2026-10-21**: `tests/test_s1_gate.py` runs the real CLI against an operator-style export and produces the 15-column form with 5 product types, 7 lots and a verifying ledger |
 | S2 | Corrections and justifications | **PASSED 2026-10-21**: `tests/test_s2_gate.py` amends seeded wrong records through the CLI; the non-exempt case yields a dated draft and a 12-hour deadline, the exempt case yields nothing, and the ledger holds both the original quantity and the amendment |
 | S3 | Guardrails and the disconnect clock | **PASSED 2026-10-21**: `tests/test_s3_gate.py` simulates a five-hour outage against a simulated clock; the only command run between disconnection and restoration is `watch`, which drafts the notice at 2h01m and records the miss at 3h; restoration produces the restoration notice and a CSV holding exactly the in-outage dispensations, and the 24-hour breach is caught too |
-| S4 | Drift view | Ten seeded drift cases are each detected, classified and resolved from the UI |
+| S4 | Drift view | **PASSED 2026-10-21**: `tests/test_s4_gate.py` seeds ten differences across all four classes (plus an ounce-for-gram record that must not be flagged), serves the screen over HTTP, and resolves all ten by posting the page's own forms; the open count reaches zero and the ledger verifies |
 | S5 | Cultivation module | A full cultivation arc, seed to harvest, recorded entirely in DH5059 shapes |
 | S6 | Processing module | A full processing arc, lot to final product and lab sample, with the immutable expiration enforced |
 | S7 | Transport module | Manifests generated from the record and accepted by the transfer flow |
