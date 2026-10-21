@@ -313,7 +313,9 @@ the command it would run, and runs nothing.
 ```
 
 The same module reads a pasted lab COA or invoice into the fields we store, and reports what it
-could not find rather than guessing. Both are deterministic, both are tested for giving the same
+could not find rather than guessing. That is measured against small language models, not
+asserted: see `docs/research/ASSIST-FINDINGS-2026-10-21.md` for why the deterministic reader
+ships and no model does. Both are deterministic, both are tested for giving the same
 answer twice, and neither can write to the record.
 
 ## Develop

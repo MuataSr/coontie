@@ -4,9 +4,16 @@ Two tracks, one rule. Track A ships in the core and needs nothing but the standa
 Track B is an optional extra that must earn its place with measurements, and can never write
 to the record.
 
-Status: Track A in build. Track B measured on 2026-10-21 (see
-`docs/research/ASSIST-BENCH-2026-10-21.md`); the numbers decide which, if any, of its
-candidates get built.
+Status: Track A in build (grammar, document reader and the inspection simulator landed;
+lineage, discrepancy explanation, prefill, anomaly flags and briefs still to come). Track B was
+measured on 2026-10-21: tables in `docs/research/ASSIST-BENCH-2026-10-21.md`, analysis and
+verdict in `docs/research/ASSIST-FINDINGS-2026-10-21.md`.
+
+**Track B verdict, so this is not re-litigated:** no model is built now. The command grammar
+beats every candidate outright (8/8 intents in 0.06 ms against 7/8 in 3.7 to 9.7 s), so B2 is
+dead. B1 survives only as a future fallback for pasted documents, and only Qwen3-0.6B has the
+numbers to justify it: 96% of fields with zero invented values, at 409 MB on disk, 586 MB in
+memory and 9.7 s per document on a 2011-era 2-core CPU. B3 and B4 remain unmeasured.
 
 ---
 

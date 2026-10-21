@@ -44,11 +44,15 @@ INTENTS = "manifest, dispatch, receive, split, adjust, sample, cure, final, audi
 
 # -- scoring -----------------------------------------------------------------
 
+NULLISH = {"", "null", "none", "n/a", "na", "not stated", "unknown", "not specified",
+           "not provided", "none stated", "-", "n/a.", "nil"}
+
+
 def norm(value) -> str:
     if value is None:
         return ""
     text = str(value).strip()
-    if text.lower() in {"", "null", "none", "n/a", "na", "not stated", "unknown", "not specified", "-"}:
+    if text.lower() in NULLISH:
         return ""
     text = text.replace("$", "").replace("%", "").replace(",", "").strip()
     text = re.sub(r"\s+", " ", text).lower()
@@ -66,8 +70,37 @@ def norm_date(value) -> str:
     return text
 
 
+NUMERIC = {"thc_percent", "cbd_percent", "quantity", "unit_price", "weight_per_g"}
+
+
+def first_number(value):
+    """The Decimal inside an answer that also carries its unit ("200 g", "$6.50/g")."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.lower() in NULLISH:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
+    if not m:
+        return None
+    try:
+        return Decimal(m.group(0)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def compare(field: str, expected, got) -> str:
     """correct | wrong | blank. A blank where the document says nothing is correct."""
+    if field in NUMERIC:
+        e = first_number(expected)
+        g = first_number(got)
+        if not e and not g:
+            return "correct"
+        if not e and g:
+            return "wrong"
+        if e and not g:
+            return "blank"
+        return "correct" if e == g else "wrong"
     e = norm_date(expected) if field in ("tested_on", "invoice_date") else norm(expected)
     g = norm_date(got) if field in ("tested_on", "invoice_date") else norm(got)
     if not e and not g:
@@ -350,15 +383,72 @@ def report(results: list[dict], out: Path, host: str) -> None:
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def rescore(jsonl: Path) -> list[dict]:
+    """Rebuild every table from a stored run, so a scoring fix costs nothing but a re-read."""
+    rows = [json.loads(line) for line in jsonl.read_text().splitlines() if line.strip()]
+    docs = {c["id"]: c for c in CASES["documents"]}
+    cmds = {c["id"]: c for c in CASES["commands"]}
+    names = []
+    for r in rows:
+        if r["model"] not in names:
+            names.append(r["model"])
+    results = []
+    for name in names:
+        doc_rows, cmd_rows = [], []
+        for r in rows:
+            if r["model"] != name or r["kind"] == "rerun":
+                continue
+            if r["case"] in docs:
+                case = docs[r["case"]]
+                for field in DOC_KEYS[case["kind"]]:
+                    doc_rows.append({"case": case["id"], "field": field,
+                                     "verdict": compare(field, case["truth"][field], r["parsed"].get(field))})
+            elif r["case"] in cmds:
+                case = cmds[r["case"]]
+                got = r["parsed"]
+                cmd_rows.append({
+                    "case": case["id"],
+                    "intent": norm(got.get("intent")) in {norm(case["intent"])} or
+                              norm(got.get("intent")) in _SYNONYMS.get(norm(case["intent"]), set()),
+                    "quantity": first_number(got.get("quantity")) == first_number(case["quantity"]),
+                    "crew": True,
+                })
+        results.append({"name": name, "docs": doc_rows, "cmds": cmd_rows})
+    return results
+
+
+# The grammar's own verbs are the vocabulary an operator would use; a model answering "send"
+# for a manifest is right in plain English, so it is scored right here.
+_SYNONYMS = {
+    "manifest": {"send", "ship", "transfer", "deliver"},
+    "dispatch": {"dispatch", "send", "ship"},
+    "receive": {"receive", "accept"},
+    "split": {"split", "move"},
+    "adjust": {"adjust", "correct"},
+    "sample": {"sample", "test"},
+    "cure": {"cure", "dry"},
+    "audit": {"audit", "check"},
+}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="docs/research/ASSIST-BENCH-2026-10-21.md")
     ap.add_argument("--jsonl", default="docs/research/assist-bench-2026-10-21.jsonl")
     ap.add_argument("--baseline-only", action="store_true")
+    ap.add_argument("--rescore", action="store_true", help="rebuild the tables from a stored run")
     ap.add_argument("models", nargs="*", help="name=/path/to/model.gguf")
     args = ap.parse_args()
 
     jsonl = ROOT / args.jsonl
+    if args.rescore:
+        results = [run_baseline()] + rescore(jsonl)
+        report(results, ROOT / args.out, f"{os.uname().nodename}, {os.cpu_count()} threads")
+        for res in results:
+            d = tally(res["docs"])
+            print(f"{res['name']}: docs {d['accuracy'] * 100:.0f}% correct, {d['wrong']} wrong, "
+                  f"{d['blank']} blank; intent {sum(1 for c in res['cmds'] if c['intent'])}/{len(res['cmds'])}")
+        return 0
     results = [run_baseline()]
     for spec in args.models:
         name, _, path = spec.partition("=")

@@ -4,91 +4,259 @@
       "id": "coa-1",
       "kind": "coa",
       "text": "CERTIFICATE OF ANALYSIS\nProduct: Blue Dream Flower 3.5g\nTotal THC 24.31 %\nTotal CBD 0.08 %\nACS Laboratory\nTested: 11/02/2026\nSample ID: ACS-88213\n",
-      "truth": {"product_name": "Blue Dream Flower 3.5g", "thc_percent": "24.31", "cbd_percent": "0.08", "lab": "ACS Laboratory", "tested_on": "2026-11-02", "sample_id": "ACS-88213"}
+      "truth": {
+        "product_name": "Blue Dream Flower 3.5g",
+        "thc_percent": "24.31",
+        "cbd_percent": "0.08",
+        "lab": "ACS Laboratory",
+        "tested_on": "2026-11-02",
+        "sample_id": "ACS-88213"
+      }
     },
     {
       "id": "coa-2",
       "kind": "coa",
       "text": "CERTIFICATE OF ANALYSIS\nSTRAIN: NIGHTSHADE GUMMIES 10MG\nTHC: 22.5%\nCBD: 0.10%\nLAB: KAYCHA LABS\nDATE OF ANALYSIS: 10/14/2026\nACCESSION: K-55119\n",
-      "truth": {"product_name": "NIGHTSHADE GUMMIES 10MG", "thc_percent": "22.5", "cbd_percent": "0.1", "lab": "Kaycha Labs", "tested_on": "2026-10-14", "sample_id": "K-55119"}
+      "truth": {
+        "product_name": "NIGHTSHADE GUMMIES 10MG",
+        "thc_percent": "22.5",
+        "cbd_percent": "0.1",
+        "lab": "Kaycha Labs",
+        "tested_on": "2026-10-14",
+        "sample_id": "K-55119"
+      }
     },
     {
       "id": "coa-3",
       "kind": "coa",
       "text": "Certificate of Analysis\nProduct: Sour Diesel Smalls\nTotal THC: 19.6 %\nModern Canna\nReport Date: 2026-10-29\nSample ID: MC-4471\n",
-      "truth": {"product_name": "Sour Diesel Smalls", "thc_percent": "19.6", "cbd_percent": null, "lab": "Modern Canna", "tested_on": "2026-10-29", "sample_id": "MC-4471"}
+      "truth": {
+        "product_name": "Sour Diesel Smalls",
+        "thc_percent": "19.6",
+        "cbd_percent": null,
+        "lab": "Modern Canna",
+        "tested_on": "2026-10-29",
+        "sample_id": "MC-4471"
+      }
     },
     {
       "id": "coa-4",
       "kind": "coa",
       "text": "CERTIFICATE OF ANALYSIS\nProduct: OG Kush Live Resin\nTotal THC 68.4 %\nTotal CBD 0.31 %\nGreenLeaf Analytics\nTested: 2026-11-05\nSample ID: GL-2210\n",
-      "truth": {"product_name": "OG Kush Live Resin", "thc_percent": "68.4", "cbd_percent": "0.31", "lab": null, "tested_on": "2026-11-05", "sample_id": "GL-2210"}
+      "truth": {
+        "product_name": "OG Kush Live Resin",
+        "thc_percent": "68.4",
+        "cbd_percent": "0.31",
+        "lab": "GreenLeaf Analytics",
+        "tested_on": "2026-11-05",
+        "sample_id": "GL-2210"
+      }
     },
     {
       "id": "coa-5",
       "kind": "coa",
       "text": "CERTIFICATE OF ANALYSIS\nSample ID: ACS-90114\nProduct: Tupelo Honey Pre-Roll 1g\nTotal THC 21.02%\nTotal CBD 0.05%\nACS Laboratory\nSampled: 2026-09-30\n",
-      "truth": {"product_name": "Tupelo Honey Pre-Roll 1g", "thc_percent": "21.02", "cbd_percent": "0.05", "lab": "ACS Laboratory", "tested_on": "2026-09-30", "sample_id": "ACS-90114"}
+      "truth": {
+        "product_name": "Tupelo Honey Pre-Roll 1g",
+        "thc_percent": "21.02",
+        "cbd_percent": "0.05",
+        "lab": "ACS Laboratory",
+        "tested_on": "2026-09-30",
+        "sample_id": "ACS-90114"
+      }
     },
     {
       "id": "coa-6",
       "kind": "coa",
       "text": "CERTIFICATE OF ANALYSIS\nProduct: Coontie Crush Vape Cart 0.5g\nTotal THC 82.7 %\nTotal CBD 1.20 %\nAct Lab\nTested: 12/01/2026\nSample ID: AL-7731\n",
-      "truth": {"product_name": "Coontie Crush Vape Cart 0.5g", "thc_percent": "82.7", "cbd_percent": "1.2", "lab": "Act Lab", "tested_on": "2026-12-01", "sample_id": "AL-7731"}
+      "truth": {
+        "product_name": "Coontie Crush Vape Cart 0.5g",
+        "thc_percent": "82.7",
+        "cbd_percent": "1.2",
+        "lab": "Act Lab",
+        "tested_on": "2026-12-01",
+        "sample_id": "AL-7731"
+      }
     },
     {
       "id": "inv-1",
       "kind": "invoice",
       "text": "INVOICE INV-2291\nBill To: Tampa Dispensary\nSeller: Nature's Grace FL, LLC\nQuantity: 200 g\nUnit Price: $7.00\nInvoice Date: 2026-12-15\n",
-      "truth": {"buyer": "Tampa Dispensary", "seller": "Nature's Grace FL, LLC", "quantity": "200", "unit_price": "7", "invoice_date": "2026-12-15"}
+      "truth": {
+        "buyer": "Tampa Dispensary",
+        "seller": "Nature's Grace FL, LLC",
+        "quantity": "200",
+        "unit_price": "7",
+        "invoice_date": "2026-12-15"
+      }
     },
     {
       "id": "inv-2",
       "kind": "invoice",
       "text": "WHOLESALE INVOICE 8891\nCustomer: Sabal Health Partners\nVendor: Tupelo Processing LLC\nQty: 1200 g\nUnit Price: 5.25\nInvoice Date: 11/20/2026\n",
-      "truth": {"buyer": "Sabal Health Partners", "seller": "Tupelo Processing LLC", "quantity": "1200", "unit_price": "5.25", "invoice_date": "2026-11-20"}
+      "truth": {
+        "buyer": "Sabal Health Partners",
+        "seller": "Tupelo Processing LLC",
+        "quantity": "1200",
+        "unit_price": "5.25",
+        "invoice_date": "2026-11-20"
+      }
     },
     {
       "id": "inv-3",
       "kind": "invoice",
       "text": "INVOICE\nBill To: Gulf Coast Relief\nRemit To: Nature's Grace FL, LLC\nQuantity: 450 g\nPrice per unit: $6.50/g\nDate: 2026-10-31\n",
-      "truth": {"buyer": "Gulf Coast Relief", "seller": "Nature's Grace FL, LLC", "quantity": "450", "unit_price": "6.5", "invoice_date": "2026-10-31"}
+      "truth": {
+        "buyer": "Gulf Coast Relief",
+        "seller": "Nature's Grace FL, LLC",
+        "quantity": "450",
+        "unit_price": "6.5",
+        "invoice_date": "2026-10-31"
+      }
     },
     {
       "id": "inv-4",
       "kind": "invoice",
       "text": "PURCHASE ORDER / INVOICE\nBill To: Emerald Coast Wellness, LLC\nFrom: Coontie Cultivation LLC\nQuantity: 75 g\nUnit Price: $9.00\nPurchase Date: 2026-11-11\n",
-      "truth": {"buyer": "Emerald Coast Wellness, LLC", "seller": "Coontie Cultivation LLC", "quantity": "75", "unit_price": "9", "invoice_date": "2026-11-11"}
+      "truth": {
+        "buyer": "Emerald Coast Wellness, LLC",
+        "seller": "Coontie Cultivation LLC",
+        "quantity": "75",
+        "unit_price": "9",
+        "invoice_date": "2026-11-11"
+      }
     },
     {
       "id": "inv-5",
       "kind": "invoice",
       "text": "INVOICE 4410\nBill To: Space Coast Cannabis\nSeller: Nature's Grace FL, LLC\nQuantity: 300 g\nInvoice Date: 2026-11-02\n",
-      "truth": {"buyer": "Space Coast Cannabis", "seller": "Nature's Grace FL, LLC", "quantity": "300", "unit_price": null, "invoice_date": "2026-11-02"}
+      "truth": {
+        "buyer": "Space Coast Cannabis",
+        "seller": "Nature's Grace FL, LLC",
+        "quantity": "300",
+        "unit_price": null,
+        "invoice_date": "2026-11-02"
+      }
     },
     {
       "id": "inv-6",
       "kind": "invoice",
       "text": "INVOICE\nBuyer: Palm Beach Provisions\nSeller: Tupelo Processing LLC\nQty: 88 g\nUnit Price: 8.75\nInvoice Date: 12/05/2026\n",
-      "truth": {"buyer": "Palm Beach Provisions", "seller": "Tupelo Processing LLC", "quantity": "88", "unit_price": "8.75", "invoice_date": "2026-12-05"}
+      "truth": {
+        "buyer": "Palm Beach Provisions",
+        "seller": "Tupelo Processing LLC",
+        "quantity": "88",
+        "unit_price": "8.75",
+        "invoice_date": "2026-12-05"
+      }
     }
   ],
   "commands": [
-    {"id": "cmd-1", "text": "send 200 g blue dream to Tampa Dispensary with Maria Lopez, Dev Patel", "intent": "manifest", "quantity": "200", "cultivar": "Blue Dream", "crew_min": 2},
-    {"id": "cmd-2", "text": "ship 50 grams of blue dream to Tampa with maria and dev", "intent": "manifest", "quantity": "50", "cultivar": "Blue Dream", "crew_min": 2},
-    {"id": "cmd-3", "text": "dispatch manifest man-4c918dee4e", "intent": "dispatch", "quantity": null, "cultivar": null, "crew_min": 0},
-    {"id": "cmd-4", "text": "receive man-4c918dee4e signed by A. Reyes", "intent": "receive", "quantity": null, "cultivar": null, "crew_min": 0},
-    {"id": "cmd-5", "text": "sample 5 g of blue dream for ACS", "intent": "sample", "quantity": "5", "cultivar": "Blue Dream", "crew_min": 0},
-    {"id": "cmd-6", "text": "adjust 2 g of blue dream because I knocked over a jar", "intent": "adjust", "quantity": "2", "cultivar": "Blue Dream", "crew_min": 0},
-    {"id": "cmd-7", "text": "cure harvest hrv-1234 to 620 g", "intent": "cure", "quantity": "620", "cultivar": null, "crew_min": 0},
-    {"id": "cmd-8", "text": "audit", "intent": "audit", "quantity": null, "cultivar": null, "crew_min": 0}
+    {
+      "id": "cmd-1",
+      "text": "send 200 g blue dream to Tampa Dispensary with Maria Lopez, Dev Patel",
+      "intent": "manifest",
+      "quantity": "200",
+      "cultivar": "Blue Dream",
+      "crew_min": 2
+    },
+    {
+      "id": "cmd-2",
+      "text": "ship 50 grams of blue dream to Tampa with maria and dev",
+      "intent": "manifest",
+      "quantity": "50",
+      "cultivar": "Blue Dream",
+      "crew_min": 2
+    },
+    {
+      "id": "cmd-3",
+      "text": "dispatch manifest man-4c918dee4e",
+      "intent": "dispatch",
+      "quantity": null,
+      "cultivar": null,
+      "crew_min": 0
+    },
+    {
+      "id": "cmd-4",
+      "text": "receive man-4c918dee4e signed by A. Reyes",
+      "intent": "receive",
+      "quantity": null,
+      "cultivar": null,
+      "crew_min": 0
+    },
+    {
+      "id": "cmd-5",
+      "text": "sample 5 g of blue dream for ACS",
+      "intent": "sample",
+      "quantity": "5",
+      "cultivar": "Blue Dream",
+      "crew_min": 0
+    },
+    {
+      "id": "cmd-6",
+      "text": "adjust 2 g of blue dream because I knocked over a jar",
+      "intent": "adjust",
+      "quantity": "2",
+      "cultivar": "Blue Dream",
+      "crew_min": 0
+    },
+    {
+      "id": "cmd-7",
+      "text": "cure harvest hrv-1234 to 620 g",
+      "intent": "cure",
+      "quantity": "620",
+      "cultivar": null,
+      "crew_min": 0
+    },
+    {
+      "id": "cmd-8",
+      "text": "audit",
+      "intent": "audit",
+      "quantity": null,
+      "cultivar": null,
+      "crew_min": 0
+    }
   ],
   "vocabulary": {
-    "cultivars": ["Blue Dream", "Nightshade Gummies", "Sour Diesel", "OG Kush"],
-    "rooms": ["INV1", "INV2", "DRY1", "EXT1"],
-    "labs": ["ACS Laboratory", "TerpLife Labs", "Modern Canna", "Method Labs", "AccuScience Laboratories", "US Cannalytics", "Kaycha Labs", "Act Lab", "Confident Cannabis"],
-    "people": ["Maria Lopez", "Dev Patel"],
-    "lots": [["stk-77ce050301", "Blue Dream"], ["stk-6ca1f059ca", "Nightshade Gummies"]],
-    "manifests": ["man-4c918dee4e"]
+    "cultivars": [
+      "Blue Dream",
+      "Nightshade Gummies",
+      "Sour Diesel",
+      "OG Kush"
+    ],
+    "rooms": [
+      "INV1",
+      "INV2",
+      "DRY1",
+      "EXT1"
+    ],
+    "labs": [
+      "ACS Laboratory",
+      "TerpLife Labs",
+      "Modern Canna",
+      "Method Labs",
+      "AccuScience Laboratories",
+      "US Cannalytics",
+      "Kaycha Labs",
+      "Act Lab",
+      "Confident Cannabis"
+    ],
+    "people": [
+      "Maria Lopez",
+      "Dev Patel"
+    ],
+    "lots": [
+      [
+        "stk-77ce050301",
+        "Blue Dream"
+      ],
+      [
+        "stk-6ca1f059ca",
+        "Nightshade Gummies"
+      ]
+    ],
+    "manifests": [
+      "man-4c918dee4e"
+    ]
   }
 }
