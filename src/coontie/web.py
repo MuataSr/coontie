@@ -1347,7 +1347,7 @@ class App:
         if snapshot:
             body.append(f"<h2>The last export</h2><p class='context'>"
                         f"{esc(str(snapshot.get('source_file') or 'pasted export'))}, as of "
-                        f"{esc(str(snapshot.get('as_of'))[:16].replace('T', ' '))}, "
+                        f"{esc(local_time(snapshot.get('as_of') or ''))}, "
                         f"{_counting(len(findings), 'open difference', 'open differences')}.</p>")
         else:
             body.append("<div class='note'>No department export has been read yet. Paste one below; "
@@ -1428,10 +1428,16 @@ class App:
                 changed.remove(noisy)
         if not changed:
             return ("nothing differs", "nothing differs")
+        def number(value):
+            if value in (None, ""):
+                return value
+            text = str(value)
+            return text[:-2] if text.endswith(".0") else text
+
         rows_ours, rows_theirs = [], []
         for key in changed:
-            mine = ours.get(key)
-            other = theirs.get(key)
+            mine = number(ours.get(key))
+            other = number(theirs.get(key))
             rows_ours.append(
                 f"<div>{esc(key)}: <strong>{esc(mine) if mine not in (None, '') else 'not held here'}</strong></div>")
             rows_theirs.append(
