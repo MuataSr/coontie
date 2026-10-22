@@ -337,6 +337,24 @@ until there are five comparable records, because a new licensee deserves silence
 confident guess. `brief` agrees its verbs and nouns with its counts, because a sentence that says
 "1 corrections were made" is the fastest way to lose a reader's trust in the number.
 
+## The appliance interface
+
+```bash
+python3 -m coontie.cli --db ws.sqlite3 serve --port 8080
+# coontie serve on http://127.0.0.1:8080/  (ctrl-c to stop)
+```
+
+Standard library only, server-rendered, no JavaScript, bound to loopback. The operator works in
+whatever browser the machine already has. Two screens are live so far: **Today**, which opens on
+breaches, exposures and what is due inside twelve hours, and **Say it**, which parses a sentence,
+shows the notes, echoes the exact command, and writes nothing. The other eight screens are
+specified in `docs/flows/gui.md` and say so plainly when opened, with the command to use instead.
+
+Security on a loopback interface: a session token minted at startup (HttpOnly, SameSite=Strict,
+required as a hidden field on every POST), `Origin` and `Host` checked on every request, a
+generated CSP that forbids scripts, and no binding outside loopback. The operator name is a claim
+for attribution; the OS login is the boundary.
+
 ## Develop
 
 ```bash

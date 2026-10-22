@@ -47,8 +47,10 @@ Rules that hold on every page:
   is the only validator; the page's job is to show what it said.
 - **Print stylesheet** on the manifest, the audit report and the brief, because all three end up on
   paper in front of someone who is not the operator.
-- **Keyboard first.** The rail is reachable with `g` then a letter (`g t` Today, `g i` Inventory),
-  and every form's first field is focused on load.
+- **Keyboard first, with no JavaScript.** The rail carries native `accesskey` attributes
+  (Alt+T for Today, Alt+I for Inventory, and so on), and every form's first field is focused on
+  load. A `g`-then-letter chord was specified first and corrected here: chords need JavaScript,
+  which this interface does not ship.
 
 ## Security, on a loopback interface
 
@@ -228,7 +230,7 @@ then verifies the ledger, the way `test_s4_gate.py` already does.
 
 | Step | Delivers | Gate |
 |---|---|---|
-| **G1** | Shell, session token, Today, Say it | Posts nothing that writes; asserts Today renders every seeded finding and that Say it navigates |
+| **G1** | Shell, session token, Today, Say it | **DONE 2026-10-21**, `tests/test_g1_gate.py`: 18 tests driving the running server, including both 403s, the origin and host refusals, escaped operator input, and an assertion that Say it leaves the ledger untouched |
 | **G2** | Inventory and Lineage | Renders a seeded lot with its moves; lineage matches `insight.lineage` exactly |
 | **G3** | Plant and Process | Drives a full cultivation and processing arc through forms; every refusal asserted once |
 | **G4** | Transport and Correct | Builds a manifest from prefill, dispatches, receives with a rejection, corrects a lot, and marks a notice sent |

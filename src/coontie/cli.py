@@ -1043,6 +1043,21 @@ def cmd_brief(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    """The appliance interface, on loopback."""
+    from .web import announce, serve
+
+    httpd = serve(args.db, port=args.port, verbose=args.verbose)
+    announce(httpd)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped", flush=True)
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="coontie", description="Open record for a Florida MMTC's internal seed-to-sale duties.")
     p.add_argument("--db", default=DEFAULT_DB, help=f"workspace file (default {DEFAULT_DB})")
@@ -1352,6 +1367,11 @@ def build_parser() -> argparse.ArgumentParser:
     brf.add_argument("--days", type=int, default=7)
     brf.add_argument("--at")
     brf.set_defaults(func=cmd_brief)
+
+    srv = _db(sub.add_parser("serve", help="start the appliance interface on 127.0.0.1"))
+    srv.add_argument("--port", type=int, default=8080)
+    srv.add_argument("--verbose", action="store_true", help="log each request")
+    srv.set_defaults(func=cmd_serve)
 
     aud = _db(sub.add_parser("audit", help="what the department would find today"))
     aud.add_argument("--json", action="store_true", help="machine-readable findings")

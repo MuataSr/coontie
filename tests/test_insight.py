@@ -143,6 +143,16 @@ class TestBrief(unittest.TestCase):
             self.assertNotIn("1 record were", text)
             ws.close()
 
+    def test_a_single_open_finding_is_referred_to_in_the_singular(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = workspace(Path(d))
+            lot = ws.new_lot(kind="extract", cultivar="X", weight="500", room="inv1", at=T0)
+            ws.adjust_stock(lot.id, remove="2", cause="spillage", reason="jar", at=T0)
+            text = brief(ws, now=T0 + timedelta(days=1))
+            self.assertIn("lists it.", text)
+            self.assertNotIn("lists them.", text)
+            ws.close()
+
     def test_counts_and_words_agree_on_a_plural_period(self):
         with tempfile.TemporaryDirectory() as d:
             ws = workspace(Path(d))

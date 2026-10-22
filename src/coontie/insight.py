@@ -340,9 +340,10 @@ def brief(ws, *, now: datetime | None = None, days: int = 7) -> str:
             parts.append(_count(breaches, "breach", "breaches"))
         if exposures:
             parts.append(_count(exposures, "exposure"))
+        pronoun = "it" if (breaches + exposures) == 1 else "them"
         sentences.append(
             f"As of now there {_is(breaches or exposures)} {' and '.join(parts)} open; "
-            "`coontie audit` lists them."
+            f"`coontie audit` lists {pronoun}."
         )
     else:
         sentences.append("Nothing is open with the department by this record's own reading.")
