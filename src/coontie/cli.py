@@ -245,7 +245,7 @@ def cmd_justify(args) -> int:
         sys.exit(f"no justification matching {args.id!r}")
     j = matches[0]
     if args.send:
-        j = ws.mark_justification_sent(j.id)
+        j = ws.mark_justification_sent(j.id, _now_arg(args.at))
         print(f"marked sent to {j.recipient} at {j.sent_at.isoformat()} ({j.status})")
     if args.show or not args.send:
         print(f"subject: {j.subject}")
@@ -1302,6 +1302,7 @@ def build_parser() -> argparse.ArgumentParser:
     jfy.add_argument("id", help="justification id (prefix is enough)")
     jfy.add_argument("--show", action="store_true")
     jfy.add_argument("--send", action="store_true")
+    jfy.add_argument("--at", help="when it was sent, ISO; defaults to now")
     jfy.set_defaults(func=cmd_justify)
 
     jrn = _db(sub.add_parser("journal", help="everything that happened to one record"))

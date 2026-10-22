@@ -671,7 +671,11 @@ class Workspace:
         self.ledger.append(
             "inventory_adjustment",
             {
-                "inventory": lot_id,
+                # same shape as adjust_stock: the catalogue requires inventory_id, and a product lot
+                # has a department id when it was linked, so say which id was written
+                "inventory_id": self._department_id(lot_id) or lot_id,
+                "inventory_id_source": "department" if self._department_id(lot_id) else "local",
+                "inventory_reference": lot_id,
                 "adjustment_type": field,
                 "reason": reason,
                 "removed_weight_or_volume": str(amendment.delta),
@@ -1031,9 +1035,13 @@ class Workspace:
         entries: list[dict] = []
         for e in self.ledger.entries():
             payload = e.payload or {}
-            if target_id in (payload.get("inventory"), payload.get("inventory_lot")) or payload.get("lot_id") == target_id:
+            if target_id in (payload.get("inventory_id"), payload.get("inventory"),
+                             payload.get("inventory_reference"),
+                             payload.get("inventory_lot")) or payload.get("lot_id") == target_id:
                 entries.append({"when": e.occurred_at, "kind": e.event_key, "detail": payload, "hash": e.hash})
-            elif e.event_key == "inventory_adjustment" and payload.get("inventory") == target_id:
+            elif e.event_key == "inventory_adjustment" and target_id in (
+                    payload.get("inventory_id"), payload.get("inventory"),
+                    payload.get("inventory_reference")):
                 entries.append({"when": e.occurred_at, "kind": e.event_key, "detail": payload, "hash": e.hash})
         for a in self.amendments(target_id):
             entries.append(
@@ -2435,7 +2443,15 @@ class Workspace:
         self.ledger.append(
             "inventory_adjustment",
             {
-                "inventory": lot.id, "adjustment_type": "weight", "reason": reason,
+                # The catalogue requires inventory_id on every adjustment. A processing lot may have
+                # no department id yet, so the field carries the department's number when the record
+                # has it and the local id when it does not, and says which one it is. Leaving the
+                # field out was the alternative, and a payload missing a required field is not a
+                # record the department can read.
+                "inventory_id": self._department_id(lot.id) or lot.id,
+                "inventory_id_source": "department" if self._department_id(lot.id) else "local",
+                "inventory_reference": lot.id,
+                "adjustment_type": "weight", "reason": reason,
                 "removed_weight_or_volume": str(value), "unit": lot.unit,
                 "facility_location": facility.id if facility else "", "cause": cause,
             },
@@ -3029,6 +3045,18 @@ class Workspace:
         }
         summary = ", ".join(f"{v} {k}" for k, v in counts.items())
         return ok, f"{reason} ({summary})"
+
+    def _department_id(self, lot_id: str) -> str:
+        """The department's inventory identification number for a lot, or empty when it has none."""
+        for table, column in (("lots", "sts_inventory_id"), ("stock_lots", "sts_inventory_id")):
+            try:
+                row = self.conn.execute(
+                    f"SELECT {column} FROM {table} WHERE id = ?", (lot_id,)).fetchone()
+            except sqlite3.OperationalError:
+                continue
+            if row and row[0]:
+                return str(row[0])
+        return ""
 
     def _count(self, table: str) -> int:
         return int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
