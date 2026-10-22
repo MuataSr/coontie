@@ -159,6 +159,63 @@ class TestVoices(unittest.TestCase):
                 ws.close()
 
 
+class TestFindingSentences(unittest.TestCase):
+    def finding(self, code="drift_open", kind="quantity_mismatch"):
+        from coontie.inspect import EXPOSURE, Finding
+
+        return Finding(
+            code, EXPOSURE, "canonical summary", subject="drf-1",
+            facts={"kind": kind, "record_key": "FL-INV-005",
+                   "ours": {"quantity": "25", "unit": "units", "status": "active"},
+                   "theirs": {"quantity": "35.0", "unit": "units", "status": "on_hold"}},
+        )
+
+    def test_each_voice_phrases_the_same_finding_its_own_way(self):
+        f = self.finding()
+        self.assertEqual(theme.finding_sentence("canonical", f), "canonical summary")
+        self.assertIn("you count 25 units, they count 35 units",
+                      theme.finding_sentence("shop", f))
+        self.assertIn("you hold 25 units, the department holds 35 units",
+                      theme.finding_sentence("quiet", f))
+        self.assertIn("quantity differs, ours 25 units, theirs 35 units",
+                      theme.finding_sentence("official", f))
+
+    def test_a_parser_artefact_is_not_a_quantity(self):
+        self.assertNotIn("35.0", theme.finding_sentence("shop", self.finding()))
+
+    def test_missing_and_status_read_differently_in_each_voice(self):
+        missing = self.finding(kind="missing_locally")
+        missing.facts["ours"] = {}
+        self.assertIn("The state has FL-INV-005 and you do not",
+                      theme.finding_sentence("shop", missing))
+        self.assertIn("is in the department's export and not in this record",
+                      theme.finding_sentence("official", missing))
+
+        status = self.finding(kind="status_mismatch")
+        self.assertIn("is on hold on their side", theme.finding_sentence("shop", status))
+        self.assertIn("status differs, ours active, theirs on hold",
+                      theme.finding_sentence("official", status))
+
+    def test_a_finding_without_facts_keeps_the_inspector_s_words(self):
+        from coontie.inspect import EXPOSURE, Finding
+
+        bare = Finding("ledger_broken", EXPOSURE, "The chain does not verify")
+        self.assertEqual(theme.finding_sentence("shop", bare), "The chain does not verify")
+
+    def test_the_manifest_sentence_speaks_each_voice(self):
+        from coontie.inspect import EXPOSURE, Finding
+
+        f = Finding("manifest_unreceived", EXPOSURE, "canonical summary", subject="man-1",
+                    facts={"manifest": "man-1", "recipient": "Tampa Dispensary",
+                           "departed": "2026-10-22T08:00:00+00:00"})
+        self.assertIn("Nothing came back from Tampa Dispensary",
+                      theme.finding_sentence("shop", f))
+        self.assertIn("No receipt recorded for the delivery to Tampa Dispensary",
+                      theme.finding_sentence("quiet", f))
+        self.assertIn("departed 2026-10-22 with no receipt",
+                      theme.finding_sentence("official", f))
+
+
 class TestInstallation(unittest.TestCase):
     def test_the_choice_is_recorded_with_who_made_it(self):
         with tempfile.TemporaryDirectory() as d:

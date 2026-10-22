@@ -93,9 +93,12 @@ and a voice that:
 
 ## What this contract does not do yet
 
-- The voice covers Today, the badge, the `fix` link and the record's own prose. The form screens still
-  speak the canonical wording; they will adopt the label table incrementally, and the checker is what
-  keeps that honest in the meantime.
+- The voice covers Today end to end: heading, lede, section names, the severity word on each row, the
+  sentence for each finding (`theme.FINDING_TEXT`, filled from `Finding.facts`), the `fix` label, the
+  badge, and the record's own prose. A finding without facts keeps the inspector's sentence, which is
+  what stops a voice from inventing a claim the record cannot support.
+- The form screens still speak the canonical wording; they will adopt the label table incrementally,
+  and the checker is what keeps that honest in the meantime.
 - There is no plugin loading yet. A third-party look is a dict registered in the module or a fork. An
   entry-point loader is a later increment, and it should land with a conformance test a stranger can
   run, not before.

@@ -15,7 +15,7 @@ Severities:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -53,6 +53,7 @@ class Finding:
     summary: str
     subject: str = ""
     detail: str = ""
+    facts: dict = field(default_factory=dict)
 
     @property
     def citation(self) -> str:
@@ -271,6 +272,8 @@ def _transport(ws) -> list[Finding]:
             f"Manifest {r['id']} to {r['recipient_name']} left on {str(r['departure_at'])[:10]} "
             "and no receipt is recorded",
             subject=r["id"],
+            facts={"manifest": r["id"], "recipient": r["recipient_name"],
+                   "departed": str(r["departure_at"])},
         ))
     for r in _rows(ws, "SELECT id, recipient_name FROM manifests WHERE status = 'received' "
                        "AND invoice_id = ''"):
@@ -354,6 +357,8 @@ def _drift(ws) -> list[Finding]:
             + (f" ({detail})" if detail else f" ({r['kind']})")
             + "; nobody has decided which is right",
             subject=r["id"],
+            facts={"kind": r["kind"], "record_key": r["record_key"],
+                   "ours": ours, "theirs": theirs},
         ))
     return out
 

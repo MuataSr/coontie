@@ -399,6 +399,10 @@ one and the tests that prove the interface behave prove all three. Voices are di
 (`canonical`, `quiet`, `shop`, `official`); a voice renames what a person reads and cannot rename a
 field the department reads.
 
+A voice reaches the whole of Today: the heading, the section names, the severity word, the sentence
+for each finding, the badge and the record's own prose. A finding the record cannot explain keeps the
+inspector's sentence, so a voice can never invent a claim.
+
 **Evidence is never themed.** The manifest, the printed audit and every export keep the department's
 words and one black-on-white layout whichever skin is installed. If a theme could print a manifest in
 10 pt grey, the theme would have damaged an inspection.

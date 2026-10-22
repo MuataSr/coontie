@@ -623,6 +623,8 @@ class App:
     # -- pages ---------------------------------------------------------------
 
     def render_today(self, ws: Workspace, operator: str) -> str:
+        from . import theme
+
         now = datetime.now(timezone.utc)
         findings = inspect(ws, now=now)
         counts = summarize(findings)
@@ -651,10 +653,12 @@ class App:
                 about = _lot_about(ws, f.subject)
                 if about:
                     where += f'<span class="cite">{esc(about)}</span>'
+                sentence = theme.finding_sentence(self.voice, f)
                 body.append(
                     f'<li class="row {esc(f.severity)}">'
-                    f'<div class="headline"><span class="sev {esc(f.severity)}">{esc(f.severity)}</span>'
-                    f"<span>{esc(f.summary)}</span></div>"
+                    f'<div class="headline"><span class="sev {esc(f.severity)}">'
+                    f"{esc(self.say('sev.' + f.severity))}</span>"
+                    f"<span>{esc(sentence)}</span></div>"
                     f'<div class="meta">{where} {cite} {link}</div></li>'
                 )
             body.append("</ul>")

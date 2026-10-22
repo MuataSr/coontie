@@ -224,6 +224,37 @@ CANONICAL: dict[str, str] = {
     "word.manifest": "Manifest",
     "word.exposures": "exposures",
     "word.exposure": "exposure",
+    "sev.breach": "Breach",
+    "sev.exposure": "Exposure",
+    "sev.note": "Note",
+}
+
+# Sentences the screen builds from a finding's facts. `{x}` is filled from Finding.facts; a voice
+# that lacks the template falls back to the canonical summary the inspector wrote.
+FINDING_TEXT: dict[str, dict[str, str]] = {
+    "canonical": {},
+    "quiet": {
+        "drift.quantity_mismatch": "{record_key}: you hold {ours_qty}, the department holds {theirs_qty}",
+        "drift.status_mismatch": "{record_key} is {theirs_status} in the department's copy, "
+                                 "{ours_status} here",
+        "drift.missing_locally": "The department has {record_key} ({theirs_qty}); this record does not",
+        "drift.missing_at_state": "This record holds {record_key} ({ours_qty}); the department's copy does not",
+        "manifest.unreceived": "No receipt recorded for the delivery to {recipient} on {departed}",
+    },
+    "shop": {
+        "drift.quantity_mismatch": "{record_key}: you count {ours_qty}, they count {theirs_qty}",
+        "drift.status_mismatch": "{record_key} is {theirs_status} on their side",
+        "drift.missing_locally": "The state has {record_key} and you do not ({theirs_qty})",
+        "drift.missing_at_state": "You have {record_key} and the state does not ({ours_qty})",
+        "manifest.unreceived": "Nothing came back from {recipient}",
+    },
+    "official": {
+        "drift.quantity_mismatch": "{record_key}: quantity differs, ours {ours_qty}, theirs {theirs_qty}",
+        "drift.status_mismatch": "{record_key}: status differs, ours {ours_status}, theirs {theirs_status}",
+        "drift.missing_locally": "{record_key} is in the department's export and not in this record",
+        "drift.missing_at_state": "{record_key} is in this record and not in the department's export",
+        "manifest.unreceived": "Manifest to {recipient} departed {departed} with no receipt recorded",
+    },
 }
 
 VOICES: dict[str, dict[str, str]] = {
@@ -241,6 +272,9 @@ VOICES: dict[str, dict[str, str]] = {
         "word.manifest": "Delivery",
         "word.exposures": "open items",
         "word.exposure": "open item",
+        "sev.breach": "Breach",
+        "sev.exposure": "Open",
+        "sev.note": "Note",
     },
     "shop": {
         "today.heading": "Good morning",
@@ -256,6 +290,9 @@ VOICES: dict[str, dict[str, str]] = {
         "word.manifest": "delivery",
         "word.exposures": "things open",
         "word.exposure": "open thing",
+        "sev.breach": "Now",
+        "sev.exposure": "Open",
+        "sev.note": "Look",
     },
     "official": {
         "today.heading": "Today",
@@ -271,6 +308,9 @@ VOICES: dict[str, dict[str, str]] = {
         "word.manifest": "Manifest",
         "word.exposures": "open items",
         "word.exposure": "open item",
+        "sev.breach": "Breach",
+        "sev.exposure": "Exposure",
+        "sev.note": "Note",
     },
 }
 DEFAULT_VOICE = "quiet"
@@ -306,6 +346,43 @@ def css_for(skin: str = DEFAULT_SKIN) -> str:
     tokens = SKINS.get(skin) or SKINS[DEFAULT_SKIN]
     root = ":root { " + " ".join(f"{name}:{value};" for name, value in tokens.items()) + " }\n"
     return root + SHELL_CSS + EVIDENCE_CSS
+
+
+def _amount(data: dict, side: str) -> str:
+    values = data.get(side) or {}
+    quantity = values.get("quantity")
+    if quantity in (None, ""):
+        return "nothing"
+    text = str(quantity)
+    text = text[:-2] if text.endswith(".0") else text
+    unit = values.get("unit") or ""
+    return f"{text} {unit}".strip()
+
+
+def finding_sentence(voice: str, finding) -> str:
+    """The screen's sentence for one finding, in the installed voice, or the canonical one."""
+    facts = getattr(finding, "facts", None) or {}
+    templates = FINDING_TEXT.get(voice) or {}
+    if not facts or not templates:
+        return finding.summary
+    if finding.code == "drift_open":
+        template = templates.get(f"drift.{facts.get('kind')}")
+    elif finding.code == "manifest_unreceived":
+        template = templates.get("manifest.unreceived")
+    else:
+        template = None
+    if not template:
+        return finding.summary
+    ours, theirs = facts.get("ours") or {}, facts.get("theirs") or {}
+    return template.format(
+        record_key=facts.get("record_key", ""),
+        ours_qty=_amount(facts, "ours"), theirs_qty=_amount(facts, "theirs"),
+        ours_status=str(ours.get("status") or "not held").replace("_", " "),
+        theirs_status=str(theirs.get("status") or "not in the export").replace("_", " "),
+        recipient=facts.get("recipient", "the recipient"),
+        departed=str(facts.get("departed") or "")[:10],
+        manifest=facts.get("manifest", ""),
+    )
 
 
 def say(voice: str, key: str) -> str:
