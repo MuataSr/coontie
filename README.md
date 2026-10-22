@@ -383,6 +383,29 @@ required as a hidden field on every POST), `Origin` and `Host` checked on every 
 generated CSP that forbids scripts, and no binding outside loopback. The operator name is a claim
 for attribution; the OS login is the boundary.
 
+## A backup you have restored, not a backup you believe in
+
+The record is one SQLite file plus a folder of documents. Both are copied at one instant, with a
+manifest that can prove the copy later:
+
+```bash
+coontie backup --to /media/usb/coontie --keep 14    # consistent copy, oldest pruned
+coontie backup --verify /media/usb/coontie          # recompute every hash in the manifest
+coontie restore --from /media/usb/coontie --db record.sqlite3 --actor "Maria Lopez"
+coontie drill                                       # back up, restore, compare, then try to fool it
+```
+
+The filename carries the chain head's first eight characters and the event count, so two copies can
+be compared without opening either. `restore` verifies before it copies, verifies the chain in the
+restored file, and only then appends `restore_performed` with both heads, so the restore cannot be the
+step that corrupts the record.
+
+`coontie drill` restores into a scratch directory, compares every table, and then **flips one byte and
+truncates a copy to prove the verification refuses both**. A backup nobody has restored is a belief.
+
+Restoring is deliberately a command and not a button: it overwrites a record, so it takes an explicit
+`--from` and `--db`. Setup can *make* a backup and lists the last five with their verification state.
+
 ## One program, three looks, four voices
 
 The record is one program with one skeleton. An operator can install a look and a voice, and a third

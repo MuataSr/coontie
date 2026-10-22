@@ -441,6 +441,67 @@ def cmd_api_user(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    from . import backup as backups
+
+    if args.verify:
+        ok, problems, manifest = backups.verify(args.verify)
+        print(f"{manifest['database']['name']}: {manifest.get('events')} events, head "
+              f"{str(manifest.get('chain_head'))[:8]}, {len(manifest.get('reports', []))} report file(s)")
+        for line in problems:
+            print(f"  {line}")
+        print("this backup verifies" if ok else f"{len(problems)} problem(s); it must not be used")
+        return 0 if ok else 1
+
+    if not args.to:
+        sys.exit("give --to <directory> to write a backup, or --verify <path> to check one")
+    ws = _ws(args)
+    try:
+        saved = backups.backup(ws, args.to)
+    except backups.BackupError as exc:
+        sys.exit(str(exc))
+    finally:
+        ws.close()
+    print(f"backed up {saved.events} events ending {saved.chain_head[:8]} to {saved.database}")
+    print(f"manifest {saved.manifest.name} lists {len(saved.reports)} report file(s)")
+    if args.keep:
+        try:
+            removed = backups.prune(args.to, args.keep)
+        except backups.BackupError as exc:
+            sys.exit(str(exc))
+        print(f"kept {args.keep}: " + (f"removed {', '.join(removed)}" if removed else "nothing to prune"))
+    print("run `coontie drill` on a copy if this is the first backup of the year")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    from . import backup as backups
+
+    try:
+        result = backups.restore(args.source, args.db, force=args.force, actor=args.actor or "")
+    except backups.BackupError as exc:
+        sys.exit(str(exc))
+    print(f"restored {result['events']} events into {result['target']}")
+    print(f"chain head {result['chain_head'][:8]} matches the manifest before the restore was recorded")
+    for table in sorted(result["after"]):
+        before = result["before"].get(table, 0)
+        if result["before"] and before != result["after"][table]:
+            print(f"  {table}: {before} -> {result['after'][table]}")
+    print("`coontie audit` on the restored record is the next check")
+    return 0
+
+
+def cmd_drill(args) -> int:
+    from . import backup as backups
+
+    try:
+        for step in backups.drill(args.db, into=args.into):
+            print(step)
+    except backups.BackupError as exc:
+        sys.exit(f"drill FAILED: {exc}")
+    return 0
+
+
 def cmd_theme(args) -> int:
     from . import theme
 
@@ -1530,6 +1591,23 @@ def build_parser() -> argparse.ArgumentParser:
                       help="used to derive a verifier; the plaintext is never stored")
     apiu.add_argument("--at")
     apiu.set_defaults(func=cmd_api_user)
+
+    bak = _db(sub.add_parser("backup", help="copy the record so it can be restored"))
+    bak.add_argument("--to", help="the directory to write the backup into")
+    bak.add_argument("--keep", type=int, help="after copying, delete the oldest beyond this many")
+    bak.add_argument("--verify", metavar="PATH", help="verify an existing backup instead of writing one")
+    bak.add_argument("--actor", help="who ran it")
+    bak.set_defaults(func=cmd_backup)
+
+    rst = _db(sub.add_parser("restore", help="restore the record from a verified backup"))
+    rst.add_argument("--from", dest="source", required=True, help="the backup database or manifest")
+    rst.add_argument("--force", action="store_true", help="overwrite an existing record")
+    rst.add_argument("--actor", help="who ran it")
+    rst.set_defaults(func=cmd_restore)
+
+    drl = _db(sub.add_parser("drill", help="prove a backup restores, and that tampering is caught"))
+    drl.add_argument("--into", help="a scratch directory; a temporary one is used otherwise")
+    drl.set_defaults(func=cmd_drill)
 
     thm = _db(sub.add_parser("theme", help="the look and the voice of the screens"))
     thm.add_argument("--list", action="store_true", help="what can be installed")

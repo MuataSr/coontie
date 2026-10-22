@@ -268,3 +268,18 @@ oversight.
 3. **Autostart.** Whether `coontie serve` should install as a service that starts with the machine,
    or stay a shortcut the operator double-clicks. My recommendation: shortcut first, service only
    once someone asks for it.
+
+
+## Screen 10, Setup: backups
+
+Added 2026-10-22 with the backup increment. Setup carries one more form, **Make a backup**, and a
+table of the last five copies with their verification state.
+
+- The form writes into `<record folder>/backups`. It changes nothing in the record, which is why it
+  may be a button at all.
+- The table names each copy, its event count, its timestamp and whether it verifies. **A copy that
+  does not verify is shown, not deleted**, so a person decides what it is.
+- The page says where the folder is, so nobody hunts for the file.
+- **Restore is not on the screen, on purpose.** It overwrites a record and belongs on the command line
+  with an explicit `--from` and `--db`. The page names the command and says a restore is never a
+  button. Spec: `docs/flows/backup.md`.

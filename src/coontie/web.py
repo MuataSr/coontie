@@ -255,6 +255,11 @@ def page(*, title: str, body: str, here: str = "", facility: str = "", operator:
 </body></html>"""
 
 
+def backup_dir(ws) -> Path:
+    """Where this record's backups live: its own folder, so the copy travels with the database."""
+    return Path(ws.path).resolve().parent / "backups"
+
+
 def _finding_link(finding, commands: dict[str, str], label: str = "fix") -> str:
     """A finding links to the screen that fixes it, or names the command if that screen is not built."""
     target = commands.get(finding.code)
@@ -391,6 +396,10 @@ SETUP_FORMS = [
             "and a voice: canonical, quiet, shop or official.",
      "fields": [("look", "Look", "calm, contrast or touch"),
                 ("voice", "Voice", "canonical, quiet, shop or official")]},
+    {"action": "backup", "verb": "Make a backup", "title": "Copy the record",
+     "why": "Copies the record and its documents into the record's own folder, with a manifest that "
+            "can prove the copy later. Restoring is a command, not a button.",
+     "fields": []},
     {"action": "import", "verb": "Import a spreadsheet", "title": "Import the incumbent export",
      "why": "Paste the CSV. Dry run first: nothing is written until you run it for real.",
      "fields": [("csv", "CSV", "")], "textarea": "csv"},
@@ -1202,6 +1211,28 @@ class App:
             body.append(f"<div class='note'>{esc(done)}</div>")
         if error:
             body.append(f"<div class='refusal'>{esc(error)}</div>")
+
+        copies = sorted(backup_dir(ws).glob("*.manifest.json"), reverse=True)[:5]
+        if copies:
+            from . import backup as backups
+
+            body.append(f"<h2>Backups in {esc(str(backup_dir(ws)))}</h2>")
+            body.append("<table><thead><tr><th>Copy</th><th class='num'>Events</th>"
+                        "<th>Ends at</th><th>State</th></tr></thead><tbody>")
+            for manifest in copies:
+                ok, problems, data = backups.verify(manifest)
+                stamp = str(data.get("created_at", ""))[:19].replace("T", " ")
+                state = "verifies" if ok else f"{len(problems)} problem(s)"
+                body.append(
+                    f"<tr><td class='ident'>{esc(manifest.name.replace('.manifest.json', ''))}</td>"
+                    f"<td class='num'>{data.get('events', 0)}</td>"
+                    f"<td>{esc(stamp)}</td><td>{esc(state)}</td></tr>")
+            body.append("</tbody></table>")
+            body.append("<p class='context'>A copy that does not verify is not deleted here; it is "
+                        "named so a person can decide what it is.</p>")
+            body.append("<p class='context'>To restore, run <code>coontie restore --from "
+                        "&lt;copy&gt; --db &lt;record&gt;</code> on the machine. A restore is never "
+                        "a button.</p>")
 
         if facility:
             body.append("<h2>Facility</h2><table><tbody>")
@@ -2106,6 +2137,15 @@ def apply_setup_form(ws: Workspace, action: str, values: dict, operator: str):
             is_quarantine=g("quarantine").lower() in {"yes", "y", "true", "1"},
         ))
         return f"Room {room.name} added as a {room.kind} room."
+    if action == "backup":
+        from . import backup as backups
+
+        try:
+            saved = backups.backup(ws, backup_dir(ws))
+        except backups.BackupError as exc:
+            raise ValueError(str(exc))
+        return (f"Copied {saved.events} events ending {saved.chain_head[:8]} to "
+                f"{saved.directory}. {len(saved.reports)} document(s) went with it.")
     if action == "appearance":
         chosen = ws.set_appearance(look=g("look"), voice=g("voice"), actor=operator)
         return (f"Look {chosen['look']}, voice {chosen['voice']}. The record is unchanged; "
