@@ -26,7 +26,8 @@ REQUIRED_TOKENS = (
     "--breach", "--exposure", "--note",
     "--hover", "--here", "--here-ink", "--picked", "--held", "--code-bg", "--code-ink",
     "--refusal-bg", "--note-bg", "--quiet-bg", "--quiet-line",
-    "--font", "--font-mono", "--size", "--leading", "--row-pad", "--radius", "--gap",
+    "--font", "--font-mono", "--size", "--meta-size", "--leading", "--row-pad", "--radius",
+    "--gap",
     "--target", "--nav-width", "--measure",
 )
 
@@ -41,7 +42,7 @@ SKINS: dict[str, dict[str, str]] = {
         "--quiet-line": "#b9cfc1",
         "--font": '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
         "--font-mono": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        "--size": "15px", "--leading": "1.5", "--row-pad": "11px", "--radius": "6px",
+        "--size": "15px", "--meta-size": "13px", "--leading": "1.5", "--row-pad": "11px", "--radius": "6px",
         "--gap": "18px", "--target": "34px", "--nav-width": "190px", "--measure": "70ch",
     },
     "contrast": {
@@ -54,7 +55,7 @@ SKINS: dict[str, dict[str, str]] = {
         "--quiet-line": "#000000",
         "--font": '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
         "--font-mono": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        "--size": "17px", "--leading": "1.6", "--row-pad": "14px", "--radius": "3px",
+        "--size": "17px", "--meta-size": "15px", "--leading": "1.6", "--row-pad": "14px", "--radius": "3px",
         "--gap": "20px", "--target": "40px", "--nav-width": "200px", "--measure": "62ch",
     },
     "touch": {
@@ -67,7 +68,7 @@ SKINS: dict[str, dict[str, str]] = {
         "--quiet-line": "#a9c6b6",
         "--font": '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
         "--font-mono": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        "--size": "19px", "--leading": "1.6", "--row-pad": "18px", "--radius": "10px",
+        "--size": "19px", "--meta-size": "17px", "--leading": "1.6", "--row-pad": "18px", "--radius": "10px",
         "--gap": "24px", "--target": "56px", "--nav-width": "220px", "--measure": "56ch",
     },
 }
@@ -117,15 +118,18 @@ ul.findings li.row.exposure { border-left-color:var(--exposure); }
 ul.findings li.row.note { border-left-color:var(--note); }
 .headline { display:contents; }
 .headline > span:not(.sev) { font-size:var(--size); line-height:var(--leading); align-self:baseline; }
-.meta { grid-column:2; font-size:calc(var(--size) - 2px); color:var(--muted); display:flex;
+.meta { grid-column:2; font-size:var(--meta-size); color:var(--muted); display:flex;
         gap:10px; flex-wrap:wrap; align-items:center; }
+.meta a { display:inline-flex; align-items:center; min-height:var(--target); padding:0 10px;
+          border:1px solid var(--line); border-radius:var(--radius); background:var(--card);
+          text-decoration:none; font-weight:600; }
 .meta code { color:var(--accent); }
 .sev { font-size:12px; letter-spacing:.05em; text-transform:uppercase; font-weight:700;
        padding:2px 7px; border-radius:calc(var(--radius) - 2px); flex:none; align-self:start; }
 .sev.breach { color:var(--accent-ink); background:var(--breach); }
 .sev.exposure { color:var(--accent-ink); background:var(--exposure); }
 .sev.note { color:var(--accent-ink); background:var(--note); }
-.cite { color:var(--muted); font-size:calc(var(--size) - 2px); }
+.cite { color:var(--muted); font-size:var(--meta-size); }
 code, pre { font-family:var(--font-mono); font-size:calc(var(--size) - 2px); }
 pre { background:var(--code-bg); color:var(--code-ink); padding:12px 14px;
       border-radius:var(--radius); overflow-x:auto; }
@@ -142,7 +146,7 @@ button.quiet { background:var(--quiet-bg); color:var(--accent); border:1px solid
            border-radius:4px; margin:14px 0; }
 .note { border-left:4px solid var(--accent); background:var(--note-bg); padding:10px 14px;
         border-radius:4px; margin:14px 0; }
-footer { color:var(--muted); font-size:calc(var(--size) - 2px); margin-top:34px;
+footer { color:var(--muted); font-size:var(--meta-size); margin-top:34px;
          border-top:1px solid var(--line); padding-top:10px; }
 table { border-collapse:collapse; width:100%; }
 th.num, td.num { text-align:right; font-variant-numeric:tabular-nums; }
