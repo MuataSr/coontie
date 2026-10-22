@@ -405,6 +405,7 @@ truncates a copy to prove the verification refuses both**. A backup nobody has r
 
 Restoring is deliberately a command and not a button: it overwrites a record, so it takes an explicit
 `--from` and `--db`. Setup can *make* a backup and lists the last five with their verification state.
+The one-page operator guide is `docs/guides/backups.md`; the contract is `docs/flows/backup.md`.
 
 ## One program, three looks, four voices
 
