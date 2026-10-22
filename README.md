@@ -2,7 +2,62 @@
 
 An open, MIT-licensed core for a Florida medical marijuana treatment center's
 **internal seed-to-sale system** (the "Internal STS Tracking System" in Rule
-64-4.221, F.A.C.).
+64-4.221, F.A.C.). Python standard library only. No database server, no cloud account,
+no per-seat licence, nothing to phone home.
+
+![Today](docs/screens/today.png)
+
+## What it is, in sixty seconds
+
+A Florida MMTC has to keep a record the department can trust: every gram, every move,
+every correction, in the department's own event shapes, with a twelve-hour clock on most
+of it. The commercial systems that do this are rented, and the operator cannot read the
+code that reports their inventory to the state.
+
+Coontie is the same job in one SQLite file and one local web page:
+
+- **The record is hash-chained and printed.** `coontie verify` recomputes every link; the
+  audit prints the chain head, the counts and a signature line that survives a printer
+  without colour.
+- **Corrections are first class.** A wrong weight takes a command and a cause, not a
+  support ticket, and the twelve-hour written notice drafts itself.
+- **Differences with the state are shown, never hidden.** Paste the department's export,
+  link the inventory numbers, and resolve each difference on one screen.
+- **The clock is visible.** The outbox says what has not been sent and how old it is.
+
+| | |
+|---|---|
+| ![Outbox](docs/screens/outbox.png) | ![Drift](docs/screens/drift.png) |
+| The outbox: what has not reached the department | Drift: what the state and the record disagree about |
+
+## What it refuses to be
+
+No storefront, no menu boards, no loyalty, no payments, no recommendation engine, no
+delivery app. Those are the things the pain research names as what breaks; adding them
+would make this another system that does everything badly. It is a record, and it says so.
+
+Nor does it claim more than it can prove: it cannot tell you a record reached the
+department, because it holds no department credentials. It tells you what is waiting, and
+it says "handed over", never "delivered".
+
+## Run it in three minutes
+
+```bash
+git clone <this repo> && cd coontie
+python3 scripts/soak.py --db demo.sqlite3 --days 30 --seed 7 --keep   # a month of one facility
+python3 -m coontie.cli --db demo.sqlite3 serve                        # http://127.0.0.1:8080
+```
+
+That record is synthetic, produced by the soak, and it is the one in the screenshots above.
+For a real first run, `docs/flows/gui.md` walks the eleven screens and the README below
+walks the same arc from the command line.
+
+## How it is built
+
+Python 3.11 or newer, standard library only: `http.server` for the page, `sqlite3` for the
+record, `unittest` for the suite. No JavaScript on any screen and no build step, enforced by
+tests that assert the CSP and the absence of a `<script>`. Every threshold has a test just
+inside and just outside it. The rules of the build are in `CONTRIBUTING.md`.
 
 ## The name
 
@@ -28,7 +83,7 @@ operator can read the code that reports their grams to the state.
 **Status: the record layer is complete through a facility's ordinary day; the appliance
 interface is complete. Version 0.0.1. Not deployed, not certified, and with no department
 API adapter: BioTrack issues credentials only to a vendor naming a sponsoring MMTC, so
-transmission is the one thing this record cannot yet do.** 371 standard-library tests, no
+transmission is the one thing this record cannot yet do.** 453 standard-library tests, no
 third-party runtime dependency. Of the 33 event types on Form DH5059-OMMU-05/2026, 31 have a
 writer; the two absent are the dispensing-side `refund` and `void_sale`, which wait on MMUR
 access rather than on effort.

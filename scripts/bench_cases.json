@@ -55,9 +55,9 @@
     {
       "id": "coa-5",
       "kind": "coa",
-      "text": "CERTIFICATE OF ANALYSIS\nSample ID: ACS-90114\nProduct: Tupelo Honey Pre-Roll 1g\nTotal THC 21.02%\nTotal CBD 0.05%\nACS Laboratory\nSampled: 2026-09-30\n",
+      "text": "CERTIFICATE OF ANALYSIS\nSample ID: ACS-90114\nProduct: Palmetto Gold Pre-Roll 1g\nTotal THC 21.02%\nTotal CBD 0.05%\nACS Laboratory\nSampled: 2026-09-30\n",
       "truth": {
-        "product_name": "Tupelo Honey Pre-Roll 1g",
+        "product_name": "Palmetto Gold Pre-Roll 1g",
         "thc_percent": "21.02",
         "cbd_percent": "0.05",
         "lab": "ACS Laboratory",
@@ -93,10 +93,10 @@
     {
       "id": "inv-2",
       "kind": "invoice",
-      "text": "WHOLESALE INVOICE 8891\nCustomer: Sabal Health Partners\nVendor: Tupelo Processing LLC\nQty: 1200 g\nUnit Price: 5.25\nInvoice Date: 11/20/2026\n",
+      "text": "WHOLESALE INVOICE 8891\nCustomer: Cypress Health Partners\nVendor: Palmetto Processing LLC\nQty: 1200 g\nUnit Price: 5.25\nInvoice Date: 11/20/2026\n",
       "truth": {
-        "buyer": "Sabal Health Partners",
-        "seller": "Tupelo Processing LLC",
+        "buyer": "Cypress Health Partners",
+        "seller": "Palmetto Processing LLC",
         "quantity": "1200",
         "unit_price": "5.25",
         "invoice_date": "2026-11-20"
@@ -141,10 +141,10 @@
     {
       "id": "inv-6",
       "kind": "invoice",
-      "text": "INVOICE\nBuyer: Palm Beach Provisions\nSeller: Tupelo Processing LLC\nQty: 88 g\nUnit Price: 8.75\nInvoice Date: 12/05/2026\n",
+      "text": "INVOICE\nBuyer: Palm Beach Provisions\nSeller: Palmetto Processing LLC\nQty: 88 g\nUnit Price: 8.75\nInvoice Date: 12/05/2026\n",
       "truth": {
         "buyer": "Palm Beach Provisions",
-        "seller": "Tupelo Processing LLC",
+        "seller": "Palmetto Processing LLC",
         "quantity": "88",
         "unit_price": "8.75",
         "invoice_date": "2026-12-05"

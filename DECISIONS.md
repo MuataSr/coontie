@@ -15,16 +15,15 @@ Rulings by Mister K, recorded so no later session re-litigates them.
    citations that force this ordering.
 5. **DH5059 is the floor for the schema.** Our own operational fields are additive,
    never a replacement for a state field.
-6. **Support model: paid support, free code.** Mu2 can sell support; the licence
-   stays MIT.
-7. **Neutral brand.** No Mu2/TML name on the project. Support is disclosed as a
+6. **Support model: paid support, free code.** The maintainers may sell support; the
+   licence stays MIT.
+7. **Neutral brand.** No company name on the project. Support is disclosed as a
    service, not baked into the identity.
 8. **Module order after the core:** cultivation, processing, transport, dispensing.
    Dispensing last because it needs MMUR answered and it serves the existing 27.
-9. **The name is Coontie.** Botanical naming is the house convention for the OER and
-   OSS product line: **Sabal** (FCLE study app), **Tupelo Honey** (TEAS/HESI study
-   app), **Coontie** (this record system). The convention is the brand, so a new
-   product in this line gets a Florida native plant name, not a coined tech word.
+9. **The name is Coontie.** Botanical naming is the house convention: this record
+   system is Coontie, a Florida native cycad. The convention is the brand, so a new
+   product in the line gets a Florida native plant name, not a coined tech word.
    The package is `coontie`, the copyright holder line is "The Coontie Authors", and
    the story behind the plant lives in `README.md`.
 10. **The product spec is derived from operator pain research, not from vendor
