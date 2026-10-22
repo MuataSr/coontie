@@ -1804,6 +1804,15 @@ class Workspace:
             raise ValueError(f"no harvest {harvest_id!r}")
         if not row["harvested_at"]:
             raise ValueError(f"harvest {harvest_id} has not been harvested yet; there is nothing to cure")
+        already = self.conn.execute(
+            "SELECT id, post_weight, cured_at FROM cures WHERE harvest_id = ? ORDER BY cured_at",
+            (harvest_id,)).fetchone()
+        if already:
+            raise ValueError(
+                f"harvest {harvest_id} was already cured to {already['post_weight']} g on "
+                f"{str(already['cured_at'])[:16].replace('T', ' ')}; a harvest is cured once. "
+                f"To correct that figure, record a correction with its cause"
+            )
         target = self._room_ref(room)
         post_d = to_amount(post)
         waste_d = to_amount(waste)
@@ -1856,9 +1865,12 @@ class Workspace:
     def cured_available(self, harvest_id: str) -> Decimal:
         row = self.conn.execute("SELECT post_weight FROM cures WHERE harvest_id = ? ORDER BY cured_at", (harvest_id,)).fetchall()
         total = sum((Decimal(r["post_weight"]) for r in row), Decimal("0"))
+        # Only a lot created directly from the cure consumes the harvest. A split, a conversion
+        # or a packaged child still carries harvest_ids for lineage, but its weight is already
+        # inside the parent's allocation: counting it again drove the balance negative.
         used = Decimal("0")
         for lot in self.stock_lots():
-            if harvest_id in lot.harvest_ids:
+            if harvest_id in lot.harvest_ids and not lot.source_lot_id:
                 used += lot.original
         return total - used
 

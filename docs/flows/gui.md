@@ -232,7 +232,7 @@ then verifies the ledger, the way `test_s4_gate.py` already does.
 |---|---|---|
 | **G1** | Shell, session token, Today, Say it | **DONE 2026-10-21**, `tests/test_g1_gate.py`: 18 tests driving the running server, including both 403s, the origin and host refusals, escaped operator input, and an assertion that Say it leaves the ledger untouched |
 | **G2** | Inventory and Lineage | **DONE 2026-10-21**, `tests/test_g2_gate.py`: the page's lineage block is asserted equal to `insight.lineage` output, line for line; filters, holds, unknown ids and the read-only promise are all tested |
-| **G3** | Plant and Process | Drives a full cultivation and processing arc through forms; every refusal asserted once |
+| **G3** | Plant and Process | **DONE 2026-10-21**, `tests/test_g3_gate.py`: eleven tests drive integration, batch, plants, move, additive, schedule, harvest, cure, lot, split, convert, ingredients, sample, final product and a correction through the running server, asserting each refusal in the rule's own words |
 | **G4** | Transport and Correct | Builds a manifest from prefill, dispatches, receives with a rejection, corrects a lot, and marks a notice sent |
 | **G5** | Audit, Setup, print | Prints the audit and the manifest; runs an import dry-run then a real import |
 
