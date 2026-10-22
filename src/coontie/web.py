@@ -1216,17 +1216,27 @@ class App:
         if copies:
             from . import backup as backups
 
-            body.append(f"<h2>Backups in {esc(str(backup_dir(ws)))}</h2>")
-            body.append("<table><thead><tr><th>Copy</th><th class='num'>Events</th>"
+            body.append(f"<h2>Copies in {esc(str(backup_dir(ws)))}</h2>")
+            body.append("<p class='context'>Each copy holds the whole record up to the moment it was "
+                        "made, and is checked again every time this page opens.</p>")
+            body.append("<table><thead><tr><th>Copy</th><th>Made</th><th class='num'>Records</th>"
                         "<th>Ends at</th><th>State</th></tr></thead><tbody>")
             for manifest in copies:
                 ok, problems, data = backups.verify(manifest)
-                stamp = str(data.get("created_at", ""))[:19].replace("T", " ")
-                state = "verifies" if ok else f"{len(problems)} problem(s)"
+                made = data.get("created_at", "")
+                moment = local_time(datetime.fromisoformat(made)) if made else ""
+                head = str(data.get("chain_head", ""))[:8]
+                state = "Verified" if ok else "Does not verify"
+                full = manifest.name.replace(".manifest.json", "")
+                # the stamp is the one part of the name that is unique to the second, and it is what
+                # --from takes, so it is the column an operator reads when two copies share a minute
+                stamp_id = full.replace("coontie-backup-", "").rsplit("-", 2)[0]
                 body.append(
-                    f"<tr><td class='ident'>{esc(manifest.name.replace('.manifest.json', ''))}</td>"
+                    f"<tr><td class='ident' title=\'{esc(full)}\'>{esc(stamp_id)}</td>"
+                    f"<td>{esc(moment)}</td>"
                     f"<td class='num'>{data.get('events', 0)}</td>"
-                    f"<td>{esc(stamp)}</td><td>{esc(state)}</td></tr>")
+                    f"<td class='ident'>{esc(head)}</td>"
+                    f"<td>{esc(state)}{'' if ok else esc(': ' + problems[0])}</td></tr>")
             body.append("</tbody></table>")
             body.append("<p class='context'>A copy that does not verify is not deleted here; it is "
                         "named so a person can decide what it is.</p>")

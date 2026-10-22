@@ -256,8 +256,11 @@ class TestTheSetupScreen(unittest.TestCase):
                 page = web.App(db).render_setup(ws, "Maria Lopez")
             finally:
                 ws.close()
-            self.assertIn("Backups in", page)
-            self.assertIn("verifies", page)
+            self.assertIn("Copies in", page)
+            # two copies in the same minute must still be told apart, by the token --from takes
+            self.assertRegex(page, r"<td class='ident' title='coontie-backup-\d{8}T\d{6}Z-")
+            self.assertIn("Verified", page)
+            self.assertIn("EDT", page)  # the operator's clock, not the manifest's UTC
             self.assertIn("A restore is never a button", page)
             self.assertEqual(len(list((root / "backups").glob("*.sqlite3"))), 1)
 
@@ -276,7 +279,7 @@ class TestTheSetupScreen(unittest.TestCase):
                 page = web.App(db).render_setup(ws, "Maria Lopez")
             finally:
                 ws.close()
-            self.assertIn("problem(s)", page)
+            self.assertIn("Does not verify", page)
             self.assertTrue(copied.exists())
 
 
