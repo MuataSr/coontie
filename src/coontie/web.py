@@ -197,6 +197,21 @@ def prose(text) -> str:
     return re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
 
 
+def local_time(moment) -> str:
+    """Show a UTC moment in the operator's timezone; the record itself stays UTC."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    if isinstance(moment, str):
+        try:
+            moment = datetime.fromisoformat(moment)
+        except ValueError:
+            return moment[:16].replace("T", " ")
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(ZoneInfo("America/New_York")).strftime("%A %-d %B %Y, %H:%M %Z")
+
+
 def page(*, title: str, body: str, here: str = "", facility: str = "", operator: str = "",
          token: str = "", badge: tuple[int, str] | None = None,
          badge_label: str = "open") -> str:
@@ -258,7 +273,7 @@ FIX_ROUTES = {
     "outage_report_missing": "coontie outage --show",
     "expired_available": "coontie stock",
     "hold_unresolved": "coontie inventory",
-    "manifest_unreceived": "coontie manifests",
+    "manifest_unreceived": "/transport",
     "manifest_no_invoice": "coontie invoice --manifest <id>",
     "harvest_unscheduled": "coontie growing",
     "disposal_early": "",
@@ -576,7 +591,7 @@ class App:
         counts = summarize(findings)
         facility = ws.facility()
         body = ['<h1>Today</h1>',
-                f'<p class="lede">{esc(now.strftime("%A %-d %B %Y, %H:%M UTC"))}</p>']
+                f'<p class="lede">{esc(local_time(now))}</p>']
 
         groups = [(BREACH, "Breaches"), (EXPOSURE, "Exposures"), (NOTE, "Notes")]
         any_rows = False
@@ -633,7 +648,7 @@ class App:
         ).fetchall()
         for r in rows:
             out.append(f"Justification <code>{esc(r['id'])}</code> is due "
-                       f"{esc(str(r['deadline'])[:16].replace('T', ' '))} UTC")
+                       f"{esc(local_time(r['deadline']))}")
         for r in ws.conn.execute(
             "SELECT id, recipient_name FROM manifests WHERE status = 'dispatched' ORDER BY created_at"
         ).fetchall():
@@ -1254,7 +1269,7 @@ class App:
         body = ["<div class='printonly'><h1>Compliance audit</h1>",
                 f"<p>{esc(facility.name if facility else 'No facility')} · license "
                 f"{esc(facility.license_number if facility else '')} · "
-                f"{esc(now.strftime('%A %-d %B %Y, %H:%M UTC'))}</p>",
+                f"{esc(local_time(now))}</p>",
                 f"<p><strong>{_counting(counts[BREACH], 'breach', 'breaches')}, "
                 f"{_counting(counts[EXPOSURE], 'exposure', 'exposures')}, "
                 f"{_counting(counts[NOTE], 'note', 'notes')}</strong> · ledger "

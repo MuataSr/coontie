@@ -260,6 +260,30 @@ class TestDrift(unittest.TestCase):
         self.assertIn("drift_resolution", keys)
         self.assertEqual(keys.count("drift_resolution"), 1)
 
+    def test_9_a_finding_names_both_numbers_rather_than_only_that_they_differ(self):
+        from coontie.inspect import inspect
+
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "ws.sqlite3"
+            seed(db)
+            ws = Workspace(db)
+            try:
+                ws.pull_state(state_csv(ws), source_file="state.csv")
+                ws.compare_drift()
+                lines = [f.summary for f in inspect(ws) if f.code == "drift_open"]
+            finally:
+                ws.close()
+            self.assertTrue(lines, "no drift findings reached the inspector")
+            joined = " ".join(lines)
+            self.assertRegex(joined, r"quantity ours \d+, theirs \d+")
+            self.assertRegex(
+                joined,
+                r"(the export has .* and no such lot is held here"
+                r"|this record holds .* and the export has no such lot)",
+            )
+            self.assertNotIn("ours not held", joined)
+            self.assertNotRegex(joined, r"\d\.0\b")     # 35.0 is a parser artefact, not a quantity
+
     def test_8_the_screen_ships_no_javascript_and_needs_the_token(self):
         _status, html = self.app.get("/drift")
         self.assertNotIn("<script", html.lower())

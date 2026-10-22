@@ -318,11 +318,41 @@ def _stock(ws) -> list[Finding]:
 
 def _drift(ws) -> list[Finding]:
     out: list[Finding] = []
-    for r in _rows(ws, "SELECT id, kind, record_key FROM drift_findings WHERE resolution IS NULL"):
+    # only the newest comparison is open work; a superseded snapshot is history, and listing its
+    # findings beside the current ones showed the same missing lot twice under two finding ids
+    latest = ws.latest_snapshot()
+    if latest is None:
+        return out
+    for r in _rows(
+        ws,
+        "SELECT id, kind, record_key, ours, theirs FROM drift_findings"
+        " WHERE resolution IS NULL AND snapshot_id = ?",
+        (latest["id"],),
+    ):
+        ours = json.loads(r["ours"] or "{}")
+        theirs = json.loads(r["theirs"] or "{}")
+
+        def number(value) -> str:
+            text = str(value if value not in (None, "") else "?")
+            return text[:-2] if text.endswith(".0") else text
+
+        if r["kind"] == "missing_locally":
+            detail = (f"the export has {number(theirs.get('quantity'))} "
+                      f"{theirs.get('unit') or ''}".rstrip() + ", and no such lot is held here")
+        elif r["kind"] == "missing_at_state":
+            detail = (f"this record holds {number(ours.get('quantity'))} "
+                      f"{ours.get('unit') or ''}".rstrip() + ", and the export has no such lot")
+        else:
+            fields = [key for key in ("quantity", "status", "unit")
+                      if key in ours and ours.get(key) != theirs.get(key)]
+            detail = ", ".join(
+                f"{key} ours {number(ours.get(key))}, theirs {number(theirs.get(key))}" for key in fields
+            )
         out.append(Finding(
             "drift_open", EXPOSURE,
-            f"The state's record and ours disagree on {r['record_key']} ({r['kind']}) and nobody "
-            "has decided which is right",
+            f"The state's record and ours disagree on {r['record_key']}"
+            + (f" ({detail})" if detail else f" ({r['kind']})")
+            + "; nobody has decided which is right",
             subject=r["id"],
         ))
     return out
