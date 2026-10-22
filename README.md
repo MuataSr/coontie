@@ -345,7 +345,7 @@ python3 -m coontie.cli --db ws.sqlite3 serve --port 8080
 ```
 
 Standard library only, server-rendered, no JavaScript, bound to loopback. The operator works in
-whatever browser the machine already has. Two screens are live so far: **Today**, which opens on
+whatever browser the machine already has. Three screens are live so far: **Today**, which opens on
 breaches, exposures and what is due inside twelve hours, and **Say it**, which parses a sentence,
 shows the notes, echoes the exact command, and writes nothing. The other eight screens are
 specified in `docs/flows/gui.md` and say so plainly when opened, with the command to use instead.

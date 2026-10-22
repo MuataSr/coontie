@@ -192,12 +192,16 @@ class TestG1(unittest.TestCase):
         self.assertIn("were written in the 7 days to", text)
         self.assertNotIn("<svg", html)
 
-    def test_a_finding_whose_screen_is_not_built_names_the_command_instead(self):
+    def test_a_finding_links_to_its_screen_once_that_screen_exists(self):
         _status, html = self.app.get("/")
-        # the fix route renders as a command, not a link, because the correction screen is not built
-        self.assertIn('class="muted">coontie justifications', html)
         body = html[html.find("<main>"):html.find("</main>")]
-        self.assertNotIn("<a", body.replace('<a class="badge', ""))
+        # the stock finding now links: Inventory is built
+        self.assertIn('<a href="/inventory?lot=', body)
+        # the correction finding still names a command: the Correct screen is not built yet
+        row = body[body.find("no written justification"):]
+        row = row[:row.find("</li>")]
+        self.assertIn("coontie justifications", row)
+        self.assertNotIn("<a", row)
 
     def test_today_states_what_the_record_cannot_check(self):
         _status, html = self.app.get("/audit")

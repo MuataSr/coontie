@@ -38,6 +38,16 @@ class TestLineage(unittest.TestCase):
             self.assertIn(child.id, text)
             ws.close()
 
+    def test_one_move_reads_as_one_move(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = workspace(Path(d))
+            lot = ws.new_lot(kind="extract", cultivar="X", weight="500", room="inv1", at=T0)
+            ws.lab_sample(lot.id, weight="5", cmtl_id="ACS Laboratory", at=T0)
+            text = "\n".join(line.render() for line in lineage(ws, lot.id))
+            self.assertIn("(1 move)", text)
+            self.assertNotIn("(1 moves)", text)
+            ws.close()
+
     def test_an_unknown_reference_says_so(self):
         with tempfile.TemporaryDirectory() as d:
             ws = workspace(Path(d))

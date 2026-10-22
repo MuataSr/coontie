@@ -90,6 +90,15 @@ button.quiet { background:#dbe9df; color:var(--accent); border:1px solid #b9cfc1
 footer { color:var(--muted); font-size:13px; margin-top:34px; border-top:1px solid var(--line);
          padding-top:10px; }
 table { border-collapse:collapse; width:100%; }
+th.num, td.num { text-align:right; font-variant-numeric:tabular-nums; }
+td.ident { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:13px; }
+tr.picked td { background:#e6efe9; }
+tr.picked td:first-child { box-shadow:inset 3px 0 0 var(--accent); font-weight:600; }
+tr.held td { background:#fdf6ec; }
+pre.lineage { background:#f6f8fa; color:var(--ink); border:1px solid var(--line);
+              white-space:pre; line-height:1.5; }
+form.filters { margin:0 0 6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+form.filters input[type=text] { width:120px; }
 th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:14px; }
 .muted { color:var(--muted); }
 @media print {
@@ -115,7 +124,8 @@ RAIL = [
 
 # Screens this build actually serves. A finding that would link to a screen not yet built shows
 # the command instead, so the interface never offers a dead link.
-BUILT = {"/": "Today", "/say": "Say it", "/audit": "Audit", "/operator": "Operator"}
+BUILT = {"/": "Today", "/say": "Say it", "/inventory": "Inventory", "/audit": "Audit",
+         "/operator": "Operator"}
 
 
 def esc(value) -> str:
@@ -175,6 +185,10 @@ def _finding_link(finding, commands: dict[str, str]) -> str:
     target = commands.get(finding.code)
     if not target:
         return ""
+    if "{subject}" in target:
+        if not finding.subject:
+            return ""
+        target = target.replace("{subject}", str(finding.subject))
     if target.startswith("/") and target.split("?")[0] in BUILT:
         return f'<a href="{esc(target)}">fix</a>'
     return f'<code class="muted">{esc(target)}</code>'
@@ -192,8 +206,9 @@ FIX_ROUTES = {
     "manifest_no_invoice": "coontie invoice --manifest <id>",
     "harvest_unscheduled": "coontie growing",
     "disposal_early": "",
-    "stock_unit_mismatch": "coontie stock",
-    "stock_negative": "coontie stock",
+    "stock_unit_mismatch": "/inventory?lot={subject}",
+    "stock_negative": "/inventory?lot={subject}",
+    "stock_no_origin": "/inventory?lot={subject}",
     "drift_open": "/drift",
     "ledger_broken": "coontie verify",
     "location_missing": "coontie journal",
@@ -329,6 +344,111 @@ class App:
         return page(title="Say it", body="\n".join(body), here="/say", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
+    def render_inventory(self, ws: Workspace, operator: str, params: dict) -> str:
+        from .insight import lineage
+
+        room_filter = (params.get("room") or "").strip()
+        held_only = params.get("held") == "1"
+        selected = (params.get("lot") or "").strip()
+
+        lots = ws.stock_lots()
+        rooms = {room.id: room.name for room in ws.rooms()}
+        if room_filter:
+            lots = [lot for lot in lots if lot.room_id == room_filter or
+                    rooms.get(lot.room_id, "") == room_filter]
+
+        product_rows = ws.conn.execute(
+            "SELECT l.id, l.room_id, l.quantity, l.unit, l.on_hold, p.name, p.cultivar, p.product_type, p.upid "
+            "FROM lots l JOIN products p ON p.id = l.product_id ORDER BY l.created_at, l.rowid"
+        ).fetchall()
+        held = [r for r in product_rows if r["on_hold"]]
+        if held_only:
+            product_rows = held
+        if room_filter:
+            product_rows = [r for r in product_rows if r["room_id"] == room_filter or
+                            rooms.get(r["room_id"], "") == room_filter]
+
+        body = ["<h1>Inventory</h1>",
+                "<p class='lede'>What the facility holds, and where each lot came from.</p>"]
+
+        if selected:
+            lines = lineage(ws, selected)
+            body.append(f"<h2>Lineage for <code>{esc(selected)}</code> "
+                        f"<a class='cite' href='/inventory' style='font-weight:400'>clear</a></h2>")
+            body.append("<pre class='lineage'>" + esc("\n".join(line.render() for line in lines)) + "</pre>")
+
+        body += [
+                "<form method='get' action='/inventory' class='filters'>",
+                "<label for='room'>Room</label> <input id='room' name='room' type='text' "
+                f"value='{esc(room_filter)}' size='8'> ",
+                "<label for='held' style='display:inline'>Held only</label> ",
+                f"<input id='held' name='held' type='checkbox' value='1' {'checked' if held_only else ''}> ",
+                "<button type='submit' class='quiet'>Filter</button>",
+                "</form>"]
+
+        # "held only" means exactly that: processing lots carry no hold flag, so they are out
+        if not held_only:
+            body.append(f"<h2>Processing lots ({len(lots)})</h2>")
+        if lots and not held_only:
+            body.append("<table><thead><tr><th>Lot</th><th>Kind</th><th>Cultivar</th>"
+                        "<th class='num'>Original</th><th class='num'>Remaining</th><th>Unit</th>"
+                        "<th>Room</th><th>Source</th></tr></thead><tbody>")
+            for lot in lots:
+                remaining = ws.stock_remaining(lot.id)
+                source = lot.source_lot_id or (lot.harvest_ids[0] if lot.harvest_ids else "")
+                mark = " class='picked'" if selected and (
+                    lot.id == selected or lot.id.startswith(selected)) else ""
+                source_cell = (f"<a class='cite' href='/inventory?lot={esc(source)}'>{esc(source)}</a>"
+                               if source else "")
+                body.append(
+                    f"<tr{mark}><td class='ident'>"
+                    f"<a href='/inventory?lot={esc(lot.id)}'>{esc(lot.id)}</a></td>"
+                    f"<td>{esc(lot.kind)}</td><td>{esc(lot.cultivar)}</td>"
+                    f"<td class='num'>{esc(lot.original)}</td>"
+                    f"<td class='num'><strong>{esc(remaining)}</strong></td>"
+                    f"<td>{esc(lot.unit)}</td>"
+                    f"<td>{esc(rooms.get(lot.room_id, lot.room_id))}</td>"
+                    f"<td>{source_cell}</td></tr>"
+                )
+            body.append("</tbody></table>")
+        elif not held_only:
+            body.append("<p class='muted'>No processing lots match.</p>")
+
+        if held:
+            body.append(f"<h2>Held product inventory ({len(held)})</h2>")
+            body.append("<table><thead><tr><th>Lot</th><th>Product</th><th>Quantity</th>"
+                        "<th>Room</th><th>Hold</th></tr></thead><tbody>")
+            for r in held:
+                body.append(
+                    f"<tr class='held'><td>{esc(r['id'])}</td>"
+                    f"<td>{esc(r['name'])} <span class='cite'>{esc(r['product_type'])}</span></td>"
+                    f"<td>{esc(r['quantity'])} {esc(r['unit'])}</td>"
+                    f"<td>{esc(rooms.get(r['room_id'], r['room_id']))}</td>"
+                    f"<td><span class='sev breach'>on hold</span></td></tr>"
+                )
+            body.append("</tbody></table>")
+
+        if product_rows and not held_only:
+            body.append(f"<h2>Product inventory ({len(product_rows)})</h2>")
+            body.append("<table><thead><tr><th>Lot</th><th>Product</th><th>Type</th>"
+                        "<th class='num'>Quantity</th><th>Unit</th><th>Room</th>"
+                        "<th>Unique product id</th></tr></thead><tbody>")
+            for r in product_rows:
+                body.append(
+                    f"<tr><td class='ident'>{esc(r['id'])}</td>"
+                    f"<td>{esc(r['name'])} <span class='cite'>{esc(r['cultivar'])}</span></td>"
+                    f"<td>{esc(r['product_type'])}</td>"
+                    f"<td class='num'>{esc(r['quantity'])}</td>"
+                    f"<td>{esc(r['unit'])}</td>"
+                    f"<td>{esc(rooms.get(r['room_id'], r['room_id']))}</td>"
+                    f"<td class='cite'>{esc(r['upid'])}</td></tr>"
+                )
+            body.append("</tbody></table>")
+
+        body.append("<footer>coontie lineage &lt;lot&gt;</footer>")
+        return page(title="Inventory", body="\n".join(body), here="/inventory", operator=operator,
+                    facility=(ws.facility().name if ws.facility() else ""), token=self.token)
+
     def _vocabulary(self, ws: Workspace) -> dict:
         lots = [(lot.id, lot.cultivar) for lot in ws.stock_lots()]
         cultivars = tuple(sorted({c for _i, c in lots if c}))
@@ -439,6 +559,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/say":
             self._with_ws(lambda ws: self.app.render_say(ws, operator))
+            return
+        if path == "/inventory":
+            params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
+                                                 keep_blank_values=True))
+            ws = self._ws()
+            try:
+                body = self.app.render_inventory(ws, operator, params)
+            except ValueError as exc:
+                self._send(404, f"<p>{html.escape(str(exc))}</p>")
+                return
+            finally:
+                ws.close()
+            self._send(200, body, headers=self._session_cookie())
             return
         if path == "/audit":
             self._with_ws(lambda ws: self._render_audit(ws, operator))

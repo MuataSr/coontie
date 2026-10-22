@@ -64,8 +64,8 @@ def lineage(ws, ref: str) -> list[Line]:
         out.append(Line(depth + 1, f"{str(move['at'])[:16]} {move['kind']}: {move['amount']} "
                                    f"{move['unit']}{target}{note}"))
     remaining = _amount(lot["original"]) - taken
-    out.append(Line(depth + 1, f"remaining {remaining} {lot['unit']} "
-                               f"({len(_rows(ws, 'SELECT id FROM stock_moves WHERE lot_id = ?', (lot['id'],)))} moves)"))
+    moves = len(_rows(ws, "SELECT id FROM stock_moves WHERE lot_id = ?", (lot["id"],)))
+    out.append(Line(depth + 1, f"remaining {remaining} {lot['unit']} ({_count(moves, 'move')})"))
 
     # parent lots, back to the material
     parent_id = lot["source_lot_id"]
