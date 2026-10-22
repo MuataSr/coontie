@@ -125,7 +125,8 @@ class TestVoices(unittest.TestCase):
             self.assertIn("This week", canonical)
             self.assertIn("Worth a look", shop)      # the same section, in the shop voice
             self.assertIn("Last week", shop)
-            self.assertIn("Good morning", shop)      # the heading
+            self.assertIn(theme.greeting("shop", __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc)), shop)   # the heading, from the clock
             self.assertIn("to sort", shop)           # the badge label
 
     def test_the_record_s_own_words_are_renamed_without_touching_the_record(self):
@@ -157,6 +158,46 @@ class TestVoices(unittest.TestCase):
                         self.assertNotIn(shop_word, printed)
             finally:
                 ws.close()
+
+
+class TestGreeting(unittest.TestCase):
+    def when(self, hour, minute=0):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        return datetime(2026, 10, 22, hour, minute, tzinfo=ZoneInfo("America/New_York"))
+
+    def test_the_shop_voice_greets_the_hour_it_actually_is(self):
+        self.assertEqual(theme.greeting("shop", self.when(8)), "Good morning")
+        self.assertEqual(theme.greeting("shop", self.when(11, 59)), "Good morning")
+        self.assertEqual(theme.greeting("shop", self.when(12)), "Good afternoon")
+        self.assertEqual(theme.greeting("shop", self.when(12, 21)), "Good afternoon")
+        self.assertEqual(theme.greeting("shop", self.when(16, 59)), "Good afternoon")
+        self.assertEqual(theme.greeting("shop", self.when(17)), "Good evening")
+        self.assertEqual(theme.greeting("shop", self.when(23, 50)), "Good evening")
+
+    def test_only_the_shop_voice_greets(self):
+        for voice in ("canonical", "quiet", "official"):
+            self.assertEqual(theme.greeting(voice, self.when(9)), "", voice)
+
+    def test_the_page_says_the_greeting_that_matches_its_own_clock(self):
+        from datetime import datetime, timezone
+
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "ws.sqlite3"
+            seed(db)
+            ws = Workspace(db)
+            try:
+                ws.set_appearance(look="calm", voice="shop", actor="test")
+                text = visible(App(db).render_today(ws, "Maria Lopez"))
+            finally:
+                ws.close()
+            expected = theme.greeting("shop", datetime.now(timezone.utc))
+            self.assertTrue(expected, "the shop voice should greet at any hour")
+            self.assertIn(expected, text)
+            for other in ("Good morning", "Good afternoon", "Good evening"):
+                if other != expected:
+                    self.assertNotIn(other, text)
 
 
 class TestFindingSentences(unittest.TestCase):

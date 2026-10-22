@@ -630,7 +630,8 @@ class App:
         counts = summarize(findings)
         facility = ws.facility()
         lede = self.say("today.lede")
-        body = [f"<h1>{esc(self.say('today.heading'))}</h1>"]
+        heading = theme.greeting(self.voice, now) or self.say("today.heading")
+        body = [f"<h1>{esc(heading)}</h1>"]
         if lede:
             body.append(f'<p class="lede">{esc(lede)}</p>')
         body.append(f'<p class="{"lede" if not lede else "context"}">{esc(local_time(now))}</p>')
@@ -681,7 +682,7 @@ class App:
         body.append(f"<p class='context'>{prose(self.speak(brief(ws, now=now, days=7)))}</p>")
         body.append("<footer>coontie audit</footer>")
         return self._page(
-            title=self.say("today.heading"), body="\n".join(body), here="/", operator=operator,
+            title=heading, body="\n".join(body), here="/", operator=operator,
             facility=facility.name if facility else "", token=self.token,
             badge=(counts[BREACH] + counts[EXPOSURE], "/audit"),
             badge_label=self.say("badge.label"),

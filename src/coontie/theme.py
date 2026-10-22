@@ -18,6 +18,11 @@ colour outside the token block, and a voice that names a label the program does 
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# The record keeps UTC; the operator reads their own wall clock. One zone name, one place.
+OPERATOR_ZONE = "America/New_York"
 
 # -- tokens ---------------------------------------------------------------------------------------
 # Every name a skin must define. A skin that omits one is refused rather than rendered half styled.
@@ -322,6 +327,11 @@ DEFAULT_VOICE = "quiet"
 # "canonical" is the wording the program ships; it needs no pack because the program already says it.
 VALID_VOICES = ("canonical", *sorted(VOICES))
 
+# A greeting is a function of the operator's clock, so it cannot live in a pack as a fixed string.
+GREETINGS: dict[str, tuple[str, str, str]] = {
+    "shop": ("Good morning", "Good afternoon", "Good evening"),
+}
+
 VOICE_TITLES = {
     "canonical": "As built: the wording that shipped.",
     "quiet": "Quiet professional: declarative, no second person.",
@@ -387,6 +397,22 @@ def finding_sentence(voice: str, finding) -> str:
         departed=str(facts.get("departed") or "")[:10],
         manifest=facts.get("manifest", ""),
     )
+
+
+def greeting(voice: str, when: datetime) -> str:
+    """The pack's greeting for the operator's local hour, or empty when the voice does not greet."""
+    words = GREETINGS.get(voice)
+    if not words:
+        return ""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    local = when.astimezone(ZoneInfo(OPERATOR_ZONE))
+    hour = local.hour
+    if hour < 12:
+        return words[0]
+    if hour < 17:
+        return words[1]
+    return words[2]
 
 
 def say(voice: str, key: str) -> str:
