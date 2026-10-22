@@ -1,25 +1,26 @@
 """S4 gate: ten seeded differences, each detected, classified, and resolved on the screen.
 
-The screen is a real HTTP page served from the workspace, and the resolutions in this test
-are real form posts, not function calls.
+The standalone S4 page was retired on 2026-10-21; this gate now drives the appliance's `/drift`
+screen, so the record-level assertions and the screen-level ones stay in one place. The
+resolutions are real form posts, not function calls.
 """
 
-import sqlite3
+import http.cookiejar
+import tempfile
 import threading
 import unittest
 import urllib.parse
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
-import tempfile
 
-from coontie.driftview import make_server
 from coontie.importer import import_csv
 from coontie.workspace import Facility, Lot, Room, Workspace
+from coontie.web import serve
 
 FIXTURE = Path(__file__).parent / "fixtures" / "operator_export.csv"
 
-STATE_HEADER = "Inventory ID,Product Name,Quantity,UOM,Status,Room,Notes\n"
+STATE_HEADER = "Inventory ID,Product Name,Quantity,UOM,Status,Room,Notes"
 
 
 def seed(db: Path) -> Workspace:
@@ -47,7 +48,7 @@ def build_state_csv(ws: Workspace) -> str:
     )
     by_id = {r["sts_inventory_id"]: r for r in lots}
 
-    lines = [STATE_HEADER.strip()]
+    lines = [STATE_HEADER]
     for key in ("FL-INV-001", "FL-INV-002", "FL-INV-003", "FL-INV-004", "FL-INV-007", "FL-INV-008"):
         r = by_id[key]
         qty, unit, status = r["quantity"], r["unit"], "Active"
@@ -71,6 +72,42 @@ def build_state_csv(ws: Workspace) -> str:
     return "\n".join(lines) + "\n"
 
 
+class Screen:
+    """The appliance in a thread, driven the way a browser drives it."""
+
+    def __init__(self, db: Path):
+        self.httpd = serve(db, port=0)
+        self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        self.jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.jar))
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    def token(self) -> str:
+        for cookie in self.jar:
+            if cookie.name == "coontie_session":
+                return cookie.value
+        return ""
+
+    def page(self, path: str = "/drift") -> str:
+        with self.opener.open(f"{self.base}{path}", timeout=10) as r:
+            return r.read().decode()
+
+    def post(self, action: str, **fields) -> str:
+        payload = {"token": self.token(), "action": action}
+        payload.update({f"{action}__{k}": v for k, v in fields.items()})
+        with self.opener.open(
+                urllib.request.Request(f"{self.base}/drift",
+                                       data=urllib.parse.urlencode(payload).encode()),
+                timeout=20) as r:
+            return r.read().decode()
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
 class TestS4Gate(unittest.TestCase):
     def test_ten_differences_detected_classified_and_resolved_on_screen(self):
         with tempfile.TemporaryDirectory() as d:
@@ -92,52 +129,50 @@ class TestS4Gate(unittest.TestCase):
             self.assertEqual(kinds["missing_at_state"], 2)
             self.assertEqual(kinds["missing_locally"], 3)
             self.assertNotIn("FL-INV-002", {i.key for i in report.items})
-
             ws.close()
 
-            # The screen, served for real.
-            server_ws = Workspace(db)
-            server = make_server(server_ws, 0)
-            port = server.server_address[1]
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            base = f"http://127.0.0.1:{port}"
-            try:
-                page = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
-                self.assertIn("Your record vs the state", page)
-                self.assertIn("10", page)
-                self.assertIn("differences", page)
-                self.assertIn("FL-INV-001", page)
-                self.assertIn("Accept the state", page)
-                self.assertIn("Record it here", page)
+            # A clean workspace, so the screen does the reading and comparing itself.
+            db2 = Path(d) / "screen.sqlite3"
+            fresh = seed(db2)
+            fresh.close()
 
-                findings = {f"{f['kind']}:{f['record_key']}": f["id"] for f in server_ws.drift_findings()}
+            screen = Screen(db2)
+            try:
+                screen.page("/drift")                     # sets the session cookie
+                page = screen.post("pull", text=state_csv)
+                self.assertIn("Open differences (10)", page)
+                self.assertIn("FL-INV-001", page)
+                self.assertIn("Use the department", page)     # accept_state
+                self.assertIn("Add it here", page)            # record_state
+                self.assertIn("Send it again", page)          # resend
+
+                reader = Workspace(db2)
+                findings = {f"{f['kind']}:{f['record_key']}": f["id"]
+                            for f in reader.drift_findings()}
+                reader.close()
                 self.assertEqual(len(findings), 10)
 
-                def post(fid, action, **extra):
-                    body = urllib.parse.urlencode({"id": fid, "action": action, **extra}).encode()
-                    return urllib.request.urlopen(base + "/resolve", data=body, timeout=5).read().decode("utf-8")
+                def resolve(fid: str, act: str, **extra) -> str:
+                    return screen.post("resolve", finding=fid, act=act, **extra)
 
-                post(findings["quantity_mismatch:FL-INV-001"], "accept_state")
-                page = post(findings["quantity_mismatch:FL-INV-007"], "recount", quantity="201")
-                post(findings["quantity_mismatch:FL-INV-008"], "accept_state")
-                post(findings["status_mismatch:FL-INV-003"], "accept_state")
-                post(findings["status_mismatch:FL-INV-004"], "keep_local")
-                post(findings["missing_at_state:FL-INV-005"], "resend")
-                post(findings["missing_at_state:FL-INV-006"], "keep_local")
-                post(findings["missing_locally:FL-INV-900"], "record_state")
-                post(findings["missing_locally:FL-INV-901"], "record_state")
-                page = post(findings["missing_locally:FL-INV-902"], "record_state")
+                resolve(findings["quantity_mismatch:FL-INV-001"], "accept_state")
+                resolve(findings["quantity_mismatch:FL-INV-007"], "recount", quantity="201")
+                resolve(findings["quantity_mismatch:FL-INV-008"], "accept_state")
+                resolve(findings["status_mismatch:FL-INV-003"], "accept_state")
+                resolve(findings["status_mismatch:FL-INV-004"], "keep_local")
+                resolve(findings["missing_at_state:FL-INV-005"], "resend")
+                resolve(findings["missing_at_state:FL-INV-006"], "keep_local")
+                resolve(findings["missing_locally:FL-INV-900"], "record_state")
+                resolve(findings["missing_locally:FL-INV-901"], "record_state")
+                page = resolve(findings["missing_locally:FL-INV-902"], "record_state")
 
-                self.assertIn("0", page)
-                self.assertIn("No differences", page)
+                self.assertIn("0 to decide", page)
+                self.assertIn("Settled", page)
             finally:
-                server.shutdown()
-                server.server_close()
-                server_ws.close()
+                screen.close()
 
             # Verify the writes through a fresh connection.
-            final = Workspace(db)
+            final = Workspace(db2)
             self.assertEqual(final.drift_findings(open_only=True), [])
             resolved = final.drift_findings(open_only=False)
             self.assertEqual(len(resolved), 10)
@@ -167,20 +202,15 @@ class TestS4Gate(unittest.TestCase):
             self.assertIn("inventory_adjustment", keys)
             final.close()
 
-    def test_the_page_says_so_when_no_snapshot_exists(self):
+    def test_the_screen_says_so_when_no_export_has_been_read(self):
         with tempfile.TemporaryDirectory() as d:
-            ws = seed(Path(d) / "ws.sqlite3")
-            server = make_server(ws, 0)
-            port = server.server_address[1]
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
+            db = Path(d) / "ws.sqlite3"
+            seed(db).close()
+            screen = Screen(db)
             try:
-                page = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5).read().decode("utf-8")
-                self.assertIn("No state snapshot yet", page)
+                self.assertIn("No department export has been read yet", screen.page("/drift"))
             finally:
-                server.shutdown()
-                server.server_close()
-                ws.close()
+                screen.close()
 
     def test_an_inapplicable_action_is_refused_with_the_options(self):
         with tempfile.TemporaryDirectory() as d:
@@ -193,6 +223,10 @@ class TestS4Gate(unittest.TestCase):
                 ws.resolve_finding(missing["id"], "accept_state")
             self.assertIn("record_state", str(ctx.exception))
             ws.close()
+
+    def test_the_retired_standalone_page_is_gone(self):
+        with self.assertRaises(ModuleNotFoundError):
+            __import__("coontie.driftview")
 
 
 if __name__ == "__main__":

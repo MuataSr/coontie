@@ -44,7 +44,7 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/amendments.py` | Corrections with causes; the 64-4.222(12) notice drafted from the amendment |
 | `src/coontie/outage.py` | The disconnection clock, the notice and restoration drafts, and the outage CSV |
 | `src/coontie/driftfeed.py` | Reads the department's export through aliases; normalises statuses, units and quantities |
-| `src/coontie/driftview.py` | The one-screen drift page and its localhost server, standard library only |
+| `src/coontie/web.py` | The appliance interface: ten screens, one session token, loopback only, standard library |
 | `src/coontie/cultivation.py` | Batches, plants, the schedule-before-harvest rule, the 72-hour disposal wait, harvest arithmetic |
 | `src/coontie/processing.py` | Cure, lot conservation, conversions, ingredients, samples, final products, the immutable expiration |
 | `src/coontie/transport.py` | Vehicles, the manifest and its statutory page, dispatch and receipt arithmetic |

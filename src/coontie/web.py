@@ -1296,8 +1296,6 @@ class App:
             body.append("</ul>")
 
         body.append("<h2>Read a new export</h2>")
-        from .driftview import render as _unused  # noqa: F401  (kept: the CLI page still serves)
-
         body.append(
             f"<form method='post' class='job-open'>"
             f"<input type='hidden' name='token' value='{esc(self.token)}'>"

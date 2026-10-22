@@ -465,9 +465,17 @@ def cmd_drift(args) -> int:
             )
         print(f"{len(rows)} difference(s)")
     elif action == "serve":
-        from .driftview import serve
+        from .web import announce, serve as serve_app
 
-        serve(args.db, port=args.port)
+        httpd = serve_app(args.db, port=args.port)
+        announce(httpd)
+        print(f"the drift screen is at http://127.0.0.1:{args.port}/drift", flush=True)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nstopped", flush=True)
+        finally:
+            httpd.server_close()
     elif action == "resolve":
         try:
             f = ws.resolve_finding(
