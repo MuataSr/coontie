@@ -35,7 +35,8 @@ SECRET_PATTERNS = [
 # Strings that must not appear in a neutral-brand project. The allowlist names files where the name is
 # the subject rather than the brand (nothing today, and adding one is a decision, not a convenience).
 BRAND_WORDS = ("Mu2", "TML", "Sabal", "Tupelo Honey")
-BRAND_ALLOWLIST: tuple = ()
+# This file is the list, not a mention of the names: it has to spell them to refuse them.
+BRAND_ALLOWLIST: tuple = ("scripts/publish_check.py",)
 
 SKIP_DIRS = {".git", "__pycache__", ".venv", "build", "dist", ".pytest_cache"}
 TEXT_SUFFIXES = {".py", ".md", ".txt", ".toml", ".cfg", ".ini", ".json", ".jsonl", ".csv", ".yaml",

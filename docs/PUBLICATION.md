@@ -22,6 +22,17 @@ Reproduce the gate:
 python3 scripts/publish_check.py
 ```
 
+## Answered 2026-10-22
+
+| Question | Ruling |
+|---|---|
+| Where it lives | **A new neutral GitHub organisation** for the project, maintainer account only, no company name |
+| Freedom to operate | **Read done**: `docs/FTO-2026-10-22.md`. No live or dead US federal mark; PyPI, npm and crates.io unclaimed; Sunbiz and GitLab unreadable from this machine and left to a person with a browser |
+| Authorship | **Rewritten** to `The Coontie Authors <dev@coontie.invalid>` across all 38 commits, before the history ever left this machine |
+| Licence headers | **Repo-level `LICENSE` only** |
+
+The sections below are kept as the record of why, not as questions still open.
+
 ## Decision 1: where it lives
 
 Handle availability, checked against GitHub on 2026-10-22:
@@ -55,7 +66,7 @@ Nobody is being misled either way; the difference is whether the check is done b
 
 ## Decision 3: commit authorship
 
-Every commit in the history is authored `ann-e@mu2.solutions`. That domain is a company name, and this
+_(Resolved: rewritten. Kept for the reasoning.)_ Every commit in the history was authored `ann-e@mu2.solutions`. That domain is a company name, and this
 project's brand decision says the company stays out of it. The history has never been pushed, so this is
 the last moment it can be changed cheaply:
 
@@ -80,10 +91,13 @@ as it stands and accept the company domain on every commit.
 
 ## The publish sequence, once the four are answered
 
+The organisation has to exist first: GitHub does not let a CLI token create one, so it is created once in
+a browser at `github.com/account/organizations/new`, then the repository is pushed into it.
+
 ```bash
 python3 scripts/publish_check.py            # must print "publishable"
-gh repo create <owner>/<name> --public --source . --remote origin --push
-gh repo edit --description "An open, MIT-licensed internal seed-to-sale record for Florida MMTCs (Rule 64-4.221, Form DH5059)" \
+gh repo create coontie-app/coontie --public --source . --remote origin --push
+gh repo edit coontie-app/coontie --description "An open, MIT-licensed internal seed-to-sale record for Florida MMTCs (Rule 64-4.221, Form DH5059)" \
              --add-topic cannabis --add-topic seed-to-sale --add-topic florida --add-topic compliance --add-topic python
 ```
 
