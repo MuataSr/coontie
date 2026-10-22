@@ -125,32 +125,6 @@ class TestApiUsers(unittest.TestCase):
             self.assertIn("permissions", str(ctx.exception))
             ws.close()
 
-    def test_an_adjustment_carries_every_field_the_catalogue_requires(self):
-        """The soak found this: a correction payload was missing inventory_id, a required field.
-
-        Stage modules were checked against the catalogue from S5 onward; corrections were not, so
-        every adjustment the record ever wrote would have been unreadable to the department.
-        """
-        with tempfile.TemporaryDirectory() as d:
-            ws = workspace(Path(d) / "ws.sqlite3")
-            try:
-                ws.amend_lot("lot-1", new_quantity=Decimal("32"), cause="miscount",
-                             reason="Physical recount", actor="Maria Lopez", when=T0)
-                entry = ws.ledger.latest("inventory_adjustment")
-                self.assertIsNotNone(entry)
-                payload = entry.payload
-                spec = BY_KEY["inventory_adjustment"]
-                for field in spec.fields:
-                    if field.required:
-                        self.assertIn(field.name, payload,
-                                      f"{field.name} is required by DH5059 and missing from the payload")
-                # the lot has no department id, so the record says which id it wrote
-                self.assertEqual(payload["inventory_id"], "lot-1")
-                self.assertEqual(payload["inventory_id_source"], "local")
-                self.assertEqual(payload["inventory_reference"], "lot-1")
-            finally:
-                ws.close()
-
     def test_the_password_field_is_the_only_catalog_field_the_record_rewrites(self):
         """The exception is declared, not silent: this test names the one field and why."""
         spec = BY_KEY["api_user"]
@@ -263,6 +237,7 @@ class TestInventoryDisposal(unittest.TestCase):
 
 class TestCatalogCoverage(unittest.TestCase):
     def test_the_five_events_carry_the_catalogues_required_fields(self):
+
         with tempfile.TemporaryDirectory() as d:
             ws = workspace(Path(d) / "ws.sqlite3")
             ws.add_employee(full_name="Maria Lopez", date_of_birth="1990-04-02",
@@ -302,6 +277,37 @@ class TestCatalogCoverage(unittest.TestCase):
             missing, [],
             f"these catalogue events have no writer yet: {missing}",
         )
+
+
+    def test_an_adjustment_carries_every_field_the_catalogue_requires(self):
+        """The soak found this: a correction payload was missing inventory_id, a required field.
+
+        Stage modules were checked against the catalogue from S5 onward; corrections were not, so
+        every adjustment the record ever wrote would have been unreadable to the department.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            ws = workspace(Path(d) / "ws.sqlite3")
+            try:
+                ws.amend_lot("lot-1", new_quantity=Decimal("32"), cause="miscount",
+                             reason="Physical recount", actor="Maria Lopez", when=T0)
+                entry = ws.ledger.latest("inventory_adjustment")
+                self.assertIsNotNone(entry)
+                payload = entry.payload
+                spec = BY_KEY["inventory_adjustment"]
+                for field in spec.fields:
+                    if field.required:
+                        self.assertIn(field.name, payload,
+                                      f"{field.name} is required by DH5059 and missing from the payload")
+                # the lot has no department id, so the record says which id it wrote
+                self.assertEqual(payload["inventory_id"], "lot-1")
+                self.assertEqual(payload["inventory_id_source"], "local")
+                self.assertEqual(payload["inventory_reference"], "lot-1")
+            finally:
+                ws.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 if __name__ == "__main__":

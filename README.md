@@ -383,6 +383,25 @@ required as a hidden field on every POST), `Origin` and `Host` checked on every 
 generated CSP that forbids scripts, and no binding outside loopback. The operator name is a claim
 for attribution; the OS login is the boundary.
 
+## A month through the record, before anyone signs up
+
+```bash
+python3 scripts/soak.py --db /tmp/soak/ws.sqlite3 --days 30 --seed 7 --keep
+```
+
+Thirty simulated days of one facility through the real CLI: batches, harvests, cures, lots, splits,
+conversions, lab samples, final products, manifests and receipts, corrections with their notices, a
+disposal after its waiting period, drift reconciliations, and one disconnection. It then checks what a
+stage test cannot: the chain verifies **every day**, no lot goes negative, weight is conserved, every
+non-exempt correction has its notice, every catalogue event carries the fields DH5059 requires, and the
+same seed reproduces the same month.
+
+It refuses to write into a path that already holds a record, and `--keep` leaves the month behind as a
+demo dataset. Spec: `docs/flows/soak.md`.
+
+**It found a real defect on its first complete run**: both correction writers were missing
+`inventory_id`, a field DH5059 requires. Fixed, pinned by a test, described in the spec.
+
 ## A backup you have restored, not a backup you believe in
 
 The record is one SQLite file plus a folder of documents. Both are copied at one instant, with a
