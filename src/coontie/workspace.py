@@ -659,6 +659,11 @@ class Workspace:
             when,
             facility_id=facility_id or None,
         )
+        # Rule 64-4.222(12): a non-exempt correction drafts the written notice. adjust_stock always
+        # did this; amend_lot did not, so a product-lot correction silently skipped the notice.
+        if amendment.exempt:
+            return amendment
+        self.create_justification(amendment.id)
         return amendment
 
     def create_justification(self, amendment_id: str, extra: str = "") -> "Justification":
@@ -668,6 +673,12 @@ class Workspace:
         amendment = self._amendment_row(amendment_id)
         if amendment is None:
             raise ValueError(f"no amendment {amendment_id!r}")
+        existing = self.conn.execute(
+            "SELECT id FROM justifications WHERE amendment_id = ? ORDER BY created_at", (amendment_id,)
+        ).fetchone()
+        if existing:
+            # One correction, one notice. Callers that draft for themselves get the same one back.
+            return self._justification_row(existing["id"])
         if amendment.exempt:
             raise ValueError(f"cause {amendment.cause!r} is exempt from the written justification")
         lot = self.conn.execute("SELECT * FROM lots WHERE id = ?", (amendment.target_id,)).fetchone()

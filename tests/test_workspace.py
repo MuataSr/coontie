@@ -81,6 +81,43 @@ class TestSetup(unittest.TestCase):
                 ws.add_room(Room(id="r3", facility_id="f1", kind="inventory", name="INV1", number="01"))
             ws.close()
 
+    def test_a_non_exempt_correction_drafts_exactly_one_notice(self):
+        """The notice is the product's promise: a correction that needs one gets one."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = make_ws(Path(d))
+            ws.add_product(product())
+            ws.conn.execute(
+                "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,created_at)"
+                " VALUES (?,?,?,?,?,?,?)",
+                ("lot-1", "p1", "inv1", "35", "g", 0, "2026-12-01T09:00:00+00:00"))
+            ws.conn.commit()
+            amendment = ws.amend_lot("lot-1", new_quantity="33", cause="miscount",
+                                     reason="recount found 33", actor="M.Lopez")
+            self.assertFalse(amendment.exempt)
+            pending = ws.justifications(pending_only=True)
+            self.assertEqual(len(pending), 1, [j.id for j in pending])
+            self.assertEqual(pending[0].amendment_id, amendment.id)
+            # asking again returns the same notice rather than a second one
+            again = ws.create_justification(amendment.id)
+            self.assertEqual(again.id, pending[0].id)
+            self.assertEqual(len(ws.justifications()), 1)
+            ws.close()
+
+    def test_an_exempt_correction_drafts_no_notice(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = make_ws(Path(d))
+            ws.add_product(product())
+            ws.conn.execute(
+                "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,created_at)"
+                " VALUES (?,?,?,?,?,?,?)",
+                ("lot-1", "p1", "inv1", "35", "g", 0, "2026-12-01T09:00:00+00:00"))
+            ws.conn.commit()
+            amendment = ws.amend_lot("lot-1", new_quantity="20", cause="waste_disposal",
+                                     reason="stems discarded", actor="M.Lopez")
+            self.assertTrue(amendment.exempt)
+            self.assertEqual(ws.justifications(), [])
+            ws.close()
+
 
 if __name__ == "__main__":
     unittest.main()

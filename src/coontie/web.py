@@ -23,6 +23,7 @@ import sys
 import threading
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -142,7 +143,8 @@ RAIL = [
 # Screens this build actually serves. A finding that would link to a screen not yet built shows
 # the command instead, so the interface never offers a dead link.
 BUILT = {"/": "Today", "/say": "Say it", "/inventory": "Inventory", "/plant": "Plant",
-         "/process": "Process", "/audit": "Audit", "/operator": "Operator"}
+         "/process": "Process", "/transport": "Transport", "/correct": "Correct",
+         "/audit": "Audit", "/operator": "Operator"}
 
 
 def esc(value) -> str:
@@ -256,6 +258,54 @@ def _dt(text: str, *, end_of_day: bool = False) -> datetime:
 
 def _csv(text: str) -> list[str]:
     return [part.strip() for part in (text or "").split(",") if part.strip()]
+
+
+TRANSPORT_FORMS = [
+    {"action": "vehicle", "verb": "Register vehicle", "title": "Register a vehicle",
+     "why": "The manifest names the make, model and plate, so the vehicle is registered once.",
+     "fields": [("name", "Name", "White Transit"), ("plate", "License plate", "FL-MMTC-12"),
+                ("make", "Make", "Ford"), ("model", "Model", "Transit"),
+                ("year", "Year", "2024"), ("vin", "VIN", "optional"),
+                ("in_service", "In service", "yes / no")]},
+    {"action": "manifest", "verb": "Build manifest", "title": "Build a manifest",
+     "why": "Generated from the record, never typed. Items as lot:quantity, separated by commas.",
+     "fields": [("recipient", "Recipient", "Tampa Dispensary"),
+                ("address", "Address", "900 N Tampa St, Tampa"),
+                ("items", "Items", "stk-...:200"),
+                ("vehicle", "Vehicle plate", "FL-MMTC-12"),
+                ("crew", "Two people in the vehicle", "Maria Lopez; Dev Patel"),
+                ("depart", "Departure", "2026-12-15 08:00"),
+                ("arrive", "Estimated arrival", "2026-12-15 11:00"),
+                ("route", "Route", "optional")]},
+    {"action": "dispatch", "verb": "Dispatch", "title": "Dispatch it",
+     "why": "Dispatching takes the weight out of the lot and starts the receipt clock.",
+     "fields": [("manifest", "Manifest", "man-..."), ("at", "Actual departure", "2026-12-15 08:05")]},
+    {"action": "receive", "verb": "Receive", "title": "Receive it",
+     "why": "Every dispatched gram must arrive or be rejected; the refusal says what is unaccounted.",
+     "fields": [("manifest", "Manifest", "man-..."),
+                ("received", "Received", "stk-...:198"),
+                ("rejected", "Rejected", "stk-...:2"),
+                ("receiver", "Received by", "Dev Patel"),
+                ("room", "Into room", "INV1")]},
+    {"action": "invoice", "verb": "Record invoice", "title": "Record the wholesale invoice",
+     "why": "The department asks for the invoice behind a wholesale transfer.",
+     "fields": [("manifest", "Manifest", "man-..."), ("buyer", "Buyer", "Tampa Dispensary"),
+                ("seller", "Seller", "Nature's Grace FL, LLC"), ("price", "Price", "1400"),
+                ("quantity", "Quantity", "198"), ("unit", "Unit", "g")]},
+]
+
+CORRECT_FORMS = [
+    {"action": "amend", "verb": "Correct a product lot", "title": "Correct a product lot",
+     "why": "Nothing is deleted: the old value stays on the ledger with the cause and the reason.",
+     "fields": [("lot", "Lot", "lot-..."),
+                ("value", "New quantity", "33"),
+                ("hold", "Hold", "leave / hold / release"),
+                ("cause", "Cause", "miscount", "cause"),
+                ("reason", "What happened", "recount found 33, not 35")]},
+    {"action": "send_notice", "verb": "Mark notice sent", "title": "Record a notice as sent",
+     "why": "A drafted notice is not compliance until it has gone to the department.",
+     "fields": [("notice", "Notice", "jst-...")]},
+]
 
 
 PLANT_FORMS = [
@@ -804,6 +854,144 @@ class App:
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
 
+    # -- Transport and Correct ----------------------------------------------
+
+    def _next_transport_action(self, ws: Workspace) -> str:
+        """The one job the record says is next: receive, then dispatch, then build, then vehicle."""
+        manifests = ws.manifests()
+        if any(m.status == "dispatched" for m in manifests):
+            return "receive"
+        if any(m.status == "built" for m in manifests):
+            return "dispatch"
+        if ws.vehicles():
+            return "manifest"
+        return "vehicle"
+
+    def _transport_rows(self, ws: Workspace) -> str:
+        out = []
+        vehicles = ws.vehicles()
+        if vehicles:
+            out.append("<h2>Vehicles</h2><table><thead><tr><th>Plate</th><th>Make and model</th>"
+                       "<th>Year</th><th>In service</th></tr></thead><tbody>")
+            for v in vehicles:
+                out.append(f"<tr><td class='ident'>{esc(v.plate)}</td>"
+                           f"<td>{esc(v.make)} {esc(v.model)}</td><td>{esc(v.year)}</td>"
+                           f"<td>{'yes' if v.in_service else 'no'}</td></tr>")
+            out.append("</tbody></table>")
+        else:
+            out.append("<p class='muted'>No vehicles registered.</p>")
+
+        manifests = ws.manifests()
+        if manifests:
+            plates = {v.id: v.plate for v in vehicles}
+            out.append("<h2>Manifests</h2><table><thead><tr><th>Manifest</th><th>Recipient</th>"
+                       "<th>Status</th><th class='num'>Quantity</th><th>Unit</th><th>Vehicle</th>"
+                       "<th>Departure</th></tr></thead><tbody>")
+            for m in manifests:
+                items = ws.manifest_items(m.id)
+                total = sum((item["quantity"] for item in items), Decimal("0"))
+                unit = items[0]["unit"] if items else ""
+                out.append(f"<tr><td class='ident'>{esc(m.id)}</td><td>{esc(m.recipient_name)}</td>"
+                           f"<td>{esc(m.status)}</td><td class='num'>{esc(total)}</td>"
+                           f"<td>{esc(unit)}</td><td class='ident'>{esc(plates.get(m.vehicle_id, ''))}</td>"
+                           f"<td class='cite'>"
+                           f"{esc(str(m.departure_at)[:16].replace('T', ' '))}</td></tr>")
+            out.append("</tbody></table>")
+            out.append("<p class='context'>A manifest is built from the record, then dispatched, "
+                       "then received; the weight only moves at dispatch and at receipt.</p>")
+        else:
+            out.append("<p class='muted'>No manifests yet.</p>")
+        return "\n".join(out)
+
+    def render_transport(self, ws: Workspace, operator: str, *, values: dict | None = None,
+                         error: str = "", done: str = "") -> str:
+        values = values or {}
+        body = ["<h1>Transport</h1>",
+                "<p class='lede'>The manifest is generated from the record, never typed "
+                "(s. 381.986(8)(g), F.S.).</p>"]
+        if done:
+            body.append(f"<div class='note'>{esc(done)}</div>")
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
+        body.append(self._transport_rows(ws))
+        body.append("<h2>Record</h2>")
+        body.append("<p class='chips'>" + " ".join(
+            f"<a href='#{esc(spec['action'])}'>{esc(spec['verb'])}</a>" for spec in TRANSPORT_FORMS
+        ) + "</p>")
+        open_action = self._next_transport_action(ws)
+        names = tuple(room.name for room in ws.rooms())
+        free_lots = [lot for lot in ws.stock_lots() if ws.stock_remaining(lot.id) > 0]
+        suggested = {"manifest": {"items": ", ".join(
+            f"{lot.id}:{ws.stock_remaining(lot.id)}" for lot in free_lots[:1])}}
+        body += [_form_html(spec, values, token=self.token, rooms=names,
+                            open_it=spec["action"] == open_action,
+                            suggested=suggested.get(spec["action"], {}))
+                 for spec in TRANSPORT_FORMS]
+        body.append("<footer>coontie vehicle · manifest · dispatch · receive · invoice</footer>")
+        return page(title="Transport", body="\n".join(body), here="/transport", operator=operator,
+                    facility=(ws.facility().name if ws.facility() else ""), token=self.token)
+
+    def _correct_rows(self, ws: Workspace) -> str:
+        out = []
+        pending = ws.justifications(pending_only=True)
+        if pending:
+            out.append(f"<h2>Notices waiting ({len(pending)})</h2>")
+            out.append("<table><thead><tr><th>Notice</th><th>Subject</th><th>Due</th>"
+                       "</tr></thead><tbody>")
+            for j in pending:
+                out.append(f"<tr><td class='ident'>{esc(j.id)}</td><td>{esc(j.amendment_id)}</td>"
+                           f"<td>{esc(str(j.deadline)[:16].replace('T', ' '))}</td></tr>")
+            out.append("</tbody></table>")
+        else:
+            out.append("<p class='muted'>No notices are waiting.</p>")
+
+        lots = ws.lots()
+        if lots:
+            products = {p.id: p for p in ws.products()}
+            out.append("<h2>Product inventory</h2><table><thead><tr><th>Lot</th><th>Product</th>"
+                       "<th class='num'>Quantity</th><th>Unit</th><th>Hold</th></tr></thead><tbody>")
+            for lot in lots:
+                product = products.get(lot.product_id)
+                hold = "on hold" if lot.on_hold else ""
+                out.append(f"<tr><td class='ident'>{esc(lot.id)}</td>"
+                           f"<td>{esc(product.name if product else lot.product_id)}</td>"
+                           f"<td class='num'>{esc(lot.quantity)}</td><td>{esc(lot.unit)}</td>"
+                           f"<td>{esc(hold)}</td></tr>")
+            out.append("</tbody></table>")
+        else:
+            out.append("<p class='muted'>No product inventory to correct.</p>")
+        out.append("<p class='context'>A processing lot is corrected on the "
+                   "<a href='/process'>Process</a> screen, next to the weights it belongs to.</p>")
+        return "\n".join(out)
+
+    def render_correct(self, ws: Workspace, operator: str, *, values: dict | None = None,
+                       error: str = "", done: str = "") -> str:
+        values = values or {}
+        body = ["<h1>Correct</h1>",
+                "<p class='lede'>Nothing is deleted. The old value stays, with the cause and the "
+                "reason, and the notice is drafted if the rule asks for one.</p>"]
+        if done:
+            body.append(f"<div class='note'>{esc(done)}</div>")
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
+        body.append(self._correct_rows(ws))
+        body.append("<h2>Record</h2>")
+        body.append("<p class='chips'>" + " ".join(
+            f"<a href='#{esc(spec['action'])}'>{esc(spec['verb'])}</a>" for spec in CORRECT_FORMS
+        ) + "</p>")
+        pending = ws.justifications(pending_only=True)
+        suggested = {"send_notice": {"notice": pending[0].id}} if len(pending) == 1 else {}
+        lots = ws.lots()
+        if len(lots) == 1:
+            suggested.setdefault("amend", {})["lot"] = lots[0].id
+        body += [_form_html(spec, values, token=self.token, open_it=index == 0,
+                            suggested=suggested.get(spec["action"], {}))
+                 for index, spec in enumerate(CORRECT_FORMS)]
+        body.append("<footer>coontie amend · justify --send</footer>")
+        return page(title="Correct", body="\n".join(body), here="/correct", operator=operator,
+                    facility=(ws.facility().name if ws.facility() else ""), token=self.token)
+
+
     def _vocabulary(self, ws: Workspace) -> dict:
         lots = [(lot.id, lot.cultivar) for lot in ws.stock_lots()]
         cultivars = tuple(sorted({c for _i, c in lots if c}))
@@ -912,12 +1100,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._with_ws(lambda ws: self.app.render_today(ws, operator))
             return
-        if path in ("/plant", "/process"):
+        if path in ("/plant", "/process", "/transport", "/correct"):
             params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
                                                  keep_blank_values=True))
             ws = self._ws()
             try:
-                render = self.app.render_plant if path == "/plant" else self.app.render_process
+                render = {"/plant": self.app.render_plant, "/process": self.app.render_process,
+                          "/transport": self.app.render_transport,
+                          "/correct": self.app.render_correct}[path]
                 body = render(ws, operator, done=params.get("done", ""))
             finally:
                 ws.close()
@@ -990,13 +1180,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        if path in ("/plant", "/process"):
+        if path in ("/plant", "/process", "/transport", "/correct"):
             action = (form.get("action") or [""])[0]
             values = {k: v[0] for k, v in form.items() if k != "token"}
-            render = self.app.render_plant if path == "/plant" else self.app.render_process
+            render = {"/plant": self.app.render_plant, "/process": self.app.render_process,
+                      "/transport": self.app.render_transport,
+                      "/correct": self.app.render_correct}[path]
+            runner = {"/plant": apply_form, "/process": apply_form,
+                      "/transport": apply_transport_form,
+                      "/correct": apply_correct_form}[path]
             ws = self._ws()
             try:
-                summary = apply_form(ws, action, values, self._operator())
+                summary = runner(ws, action, values, self._operator())
             except ValueError as exc:
                 body = render(ws, self._operator(), values=values, error=str(exc))
                 ws.close()
@@ -1013,13 +1208,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        if path in ("/plant", "/process"):
+        if path in ("/plant", "/process", "/transport", "/correct"):
             action = (form.get("action") or [""])[0]
             values = {k: v[0] for k, v in form.items() if k != "token"}
-            render = self.app.render_plant if path == "/plant" else self.app.render_process
+            render = {"/plant": self.app.render_plant, "/process": self.app.render_process,
+                      "/transport": self.app.render_transport,
+                      "/correct": self.app.render_correct}[path]
+            runner = {"/plant": apply_form, "/process": apply_form,
+                      "/transport": apply_transport_form,
+                      "/correct": apply_correct_form}[path]
             ws = self._ws()
             try:
-                summary = apply_form(ws, action, values, self._operator())
+                summary = runner(ws, action, values, self._operator())
             except ValueError as exc:
                 body = render(ws, self._operator(), values=values, error=str(exc))
                 ws.close()
@@ -1157,6 +1357,88 @@ def apply_form(ws: Workspace, action: str, values: dict, operator: str) -> str:
                 else "Exempt from a written justification under Rule 64-4.222(12).")
         return f"Correction {amendment.id} recorded. {tail}"
     raise ValueError(f"no form called {action!r}")
+
+
+
+def _pairs(text: str) -> list[tuple[str, str]]:
+    """Read ``id:quantity, id:quantity`` the way a person types it."""
+    out: list[tuple[str, str]] = []
+    for chunk in (text or "").replace(";", ",").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if ":" not in chunk:
+            raise ValueError(f"cannot read {chunk!r}; write lot:quantity")
+        lot, _, quantity = chunk.partition(":")
+        out.append((lot.strip(), quantity.strip()))
+    return out
+
+
+def apply_transport_form(ws: Workspace, action: str, values: dict, operator: str) -> str:
+    def g(name: str) -> str:
+        return (values.get(f"{action}__{name}") or "").strip()
+
+    if action == "vehicle":
+        vehicle = ws.register_vehicle(
+            name=g("name"), plate=g("plate"), make=g("make"), model=g("model"),
+            year=g("year"), vin=g("vin"),
+            in_service=g("in_service").lower() not in {"no", "n", "false", "0"},
+        )
+        return f"Vehicle {vehicle.plate} registered."
+    if action == "manifest":
+        pairs = _pairs(g("items"))
+        if not pairs:
+            raise ValueError("a manifest needs at least one item, written lot:quantity")
+        crew = tuple(name.strip() for name in re.split(r"[;,]", g("crew")) if name.strip())
+        manifest = ws.build_manifest(
+            recipient_name=g("recipient"), recipient_address=g("address"),
+            vehicle=ws.vehicle(g("vehicle")).id, employee_ids=crew,
+            departure_at=_dt(g("depart")), arrival_at=_dt(g("arrive")),
+            items=[(lot, quantity, "") for lot, quantity in pairs], route=g("route"),
+        )
+        return f"Manifest {manifest.id} built for {manifest.recipient_name}."
+    if action == "dispatch":
+        manifest = ws.dispatch_manifest(g("manifest"), at=_dt(g("at")) if g("at") else None)
+        return f"Manifest {manifest.id} dispatched."
+    if action == "receive":
+        manifest = ws.receive_manifest(
+            g("manifest"), receiver_name=g("receiver"), room=g("room"),
+            received={lot: qty for lot, qty in _pairs(g("received"))},
+            rejected={lot: qty for lot, qty in _pairs(g("rejected"))},
+        )
+        return f"Manifest {manifest.id} received."
+    if action == "invoice":
+        invoice = ws.record_invoice(g("manifest"), buyer=g("buyer"), seller=g("seller"),
+                                    price=g("price") or 0, quantity=g("quantity") or 0,
+                                    unit=g("unit") or "g")
+        return f"Invoice {invoice} recorded."
+    raise ValueError(f"no transport form called {action!r}")
+
+
+def apply_correct_form(ws: Workspace, action: str, values: dict, operator: str) -> str:
+    def g(name: str) -> str:
+        return (values.get(f"{action}__{name}") or "").strip()
+
+    if action == "amend":
+        hold = g("hold").lower()
+        new_hold = True if hold == "hold" else False if hold == "release" else None
+        amendment = ws.amend_lot(
+            g("lot"),
+            new_quantity=g("value") or None,
+            new_on_hold=new_hold,
+            cause=g("cause"), reason=g("reason"), actor=operator,
+        )
+        pending = [j for j in ws.justifications(pending_only=True)
+                   if j.amendment_id == amendment.id]
+        tail = (f"Notice {pending[0].id} drafted, due "
+                f"{str(pending[0].deadline)[:16].replace('T', ' ')}. Nothing was deleted."
+                if pending else
+                "Exempt from a written justification under Rule 64-4.222(12).")
+        return f"Correction {amendment.id} recorded. {tail}"
+    if action == "send_notice":
+        ws.mark_justification_sent(g("notice"))
+        return f"Notice {g('notice')} marked sent."
+    raise ValueError(f"no correction form called {action!r}")
 
 
 
