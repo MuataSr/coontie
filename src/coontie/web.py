@@ -154,6 +154,7 @@ RAIL = [
     ("/transport", "Transport", "r"),
     ("/correct", "Correct", "c"),
     ("/drift", "Drift", "d"),
+    ("/outbox", "Outbox", "o"),
     ("/audit", "Audit", "a"),
     ("/setup", "Setup", "s"),
 ]
@@ -162,7 +163,7 @@ RAIL = [
 # the command instead, so the interface never offers a dead link.
 BUILT = {"/": "Today", "/say": "Say it", "/inventory": "Inventory", "/plant": "Plant",
          "/process": "Process", "/transport": "Transport", "/correct": "Correct",
-         "/drift": "Drift", "/audit": "Audit", "/setup": "Setup", "/operator": "Operator"}
+         "/drift": "Drift", "/outbox": "Outbox", "/audit": "Audit", "/setup": "Setup", "/operator": "Operator"}
 
 
 def esc(value) -> str:
@@ -253,6 +254,18 @@ def page(*, title: str, body: str, here: str = "", facility: str = "", operator:
   </main>
 </div>
 </body></html>"""
+
+
+def _human_age(delta) -> str:
+    total = int(delta.total_seconds())
+    days, rest = divmod(total, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    if days:
+        return f"{days} d {hours} h"
+    if hours:
+        return f"{hours} h {minutes} m"
+    return f"{minutes} m"
 
 
 def backup_dir(ws) -> Path:
@@ -638,11 +651,25 @@ class App:
         findings = inspect(ws, now=now)
         counts = summarize(findings)
         facility = ws.facility()
+        from . import transmission
+
+        state = transmission.backlog(ws, now=now)
+        if state["waiting"]:
+            overdue = state["overdue"]
+            sentence = (f"{state['waiting']} record(s) not yet sent. Oldest "
+                        f"{_human_age(state['oldest'])}; the department's window is 12 hours.")
+            tone = "refusal" if overdue else "note"
+            body_note = (f"{overdue} of them are past that window. " if overdue else "")
+            pending_line = (f"<div class='{tone}'>{esc(sentence)} {esc(body_note)}"
+                            f"<a href='/outbox'>Open the outbox</a></div>")
+
         lede = self.say("today.lede")
         heading = theme.greeting(self.voice, now) or self.say("today.heading")
         body = [f"<h1>{esc(heading)}</h1>"]
         if lede:
             body.append(f'<p class="lede">{esc(lede)}</p>')
+        if state["waiting"]:
+            body.append(pending_line)
         body.append(f'<p class="{"lede" if not lede else "context"}">{esc(local_time(now))}</p>')
 
         groups = [(BREACH, self.say("today.breaches")), (EXPOSURE, self.say("today.exposures")),
@@ -1345,6 +1372,68 @@ class App:
         return self._page(title="Setup", body="\n".join(body), here="/setup", operator=operator,
                     facility=(facility.name if facility else ""), token=self.token)
 
+    def render_outbox(self, ws: Workspace, operator: str, *, values: dict | None = None,
+                      error: str = "", done: str = "") -> str:
+        from . import transmission
+
+        values = values or {}
+        now = datetime.now(timezone.utc)
+        state = transmission.backlog(ws, now=now)
+        waiting = transmission.owed(ws, now=now)
+        body = ["<h1>Outbox</h1>",
+                "<p class='lede'>What has not reached the department, and how old it is.</p>"]
+        if done:
+            body.append(f"<div class='note'>{esc(done)}</div>")
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
+
+        if state["waiting"]:
+            overdue = state["overdue"]
+            tone = "refusal" if overdue else "note"
+            line = (f"{state['waiting']} record(s) not yet sent. Oldest "
+                    f"{_human_age(state['oldest'])}; the department's window is 12 hours, real time for "
+                    f"dispensing and both sides of a transfer.")
+            if overdue:
+                line += f" {overdue} of them are past that window."
+            body.append(f"<div class='{tone}'>{esc(line)}</div>")
+        else:
+            body.append("<div class='note'>Nothing is waiting. Every record this machine holds has been "
+                        "sealed into a package.</div>")
+
+        if waiting:
+            body.append("<h2>Waiting</h2><table><thead><tr><th>Record</th><th>Which record</th>"
+                        "<th>Made</th><th>Due</th><th>State</th></tr></thead><tbody>")
+            for item in waiting[:20]:
+                late = item.overdue(now)
+                body.append(
+                    f"<tr><td>{esc(item.title)}</td><td class='ident'>{esc(item.ref)}</td>"
+                    f"<td class='ident'>{esc(local_time(item.occurred_at))}</td>"
+                    f"<td class='ident'>{esc(local_time(item.due_at))}</td>"
+                    f"<td>{'past the window' if late else 'waiting'}</td></tr>")
+            body.append("</tbody></table>")
+            if len(waiting) > 20:
+                body.append(f"<p class='context'>and {len(waiting) - 20} more below these twenty.</p>")
+
+        made = transmission.packages(ws)
+        if made:
+            body.append("<h2>Packages</h2><table><thead><tr><th>Package</th><th class='num'>Records</th>"
+                        "<th>State</th><th>What happened</th></tr></thead><tbody>")
+            for pack in made:
+                body.append(
+                    f"<tr><td class='ident'>{esc(pack.id)}</td><td class='num'>{pack.events}</td>"
+                    f"<td>{esc(pack.state.replace('_', ' '))}</td>"
+                    f"<td>{esc(pack.result or 'sealed, not handed over')}</td></tr>")
+            body.append("</tbody></table>")
+
+        for spec in OUTBOX_FORMS:
+            body.append(_form_html(spec, values, token=self.token))
+        body.append("<p class='context'>This build has no department adapter. A folder hand-off copies "
+                    "the file and says so; it never reports a record as delivered, because nobody has "
+                    "confirmed that it arrived.</p>")
+        return self._page(title="Outbox", body="\n".join(body), here="/outbox", operator=operator,
+                          facility=(ws.facility().name if ws.facility() else ""), token=self.token,
+                          badge=(state["waiting"], "/outbox"), badge_label="to send")
+
     def render_audit(self, ws: Workspace, operator: str) -> str:
         from .inspect import CANNOT_CHECK, inspect as run_inspect, summarize as tally
 
@@ -1750,6 +1839,12 @@ class Handler(BaseHTTPRequestHandler):
                 **self._session_cookie(),
             })
             return
+        if path == "/outbox":
+            params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
+                                                 keep_blank_values=True))
+            done = params.get("done", "")
+            self._with_ws(lambda ws: self.app.render_outbox(ws, operator, done=done))
+            return
         if path == "/audit":
             self._with_ws(lambda ws: self.app.render_audit(ws, operator))
             return
@@ -1857,6 +1952,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", f"{path}?done={urllib.parse.quote(summary)}")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+
+        if path == "/outbox":
+            action = (form.get("action") or [""])[0]
+            values = {k: v[0] for k, v in form.items() if k != "token"}
+            ws = self._ws()
+            try:
+                summary = apply_outbox_form(ws, action, values, self._operator())
+            except ValueError as exc:
+                body = self.app.render_outbox(ws, self._operator(), values=values, error=str(exc))
+                ws.close()
+                self._send(200, body, headers=self._session_cookie())
+                return
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            self._send(303, "", headers={"Location": "/outbox?done=" + urllib.parse.quote(summary),
+                                         **self._session_cookie()})
             return
 
         if path == "/drift":
@@ -2112,6 +2227,57 @@ def apply_correct_form(ws: Workspace, action: str, values: dict, operator: str) 
     raise ValueError(f"no correction form called {action!r}")
 
 
+
+
+OUTBOX_FORMS = [
+    {"action": "package", "verb": "Seal what is waiting", "title": "Seal the waiting records",
+     "why": "Writes one file holding every record that has not been sent, with a hash so it can be "
+            "checked later. Nothing leaves the machine.",
+     "fields": [("adapter", "Adapter", "stub or folder"),
+                ("to", "Folder (for the folder adapter)", "/media/usb/handover")]},
+    {"action": "send", "verb": "Hand a package over", "title": "Hand a package over",
+     "why": "One hand-off per package. A folder hand-off is not a delivery: nobody has confirmed it "
+            "arrived.",
+     "fields": [("package", "Package", "tx-…"), ("adapter", "Adapter", "folder"),
+                ("to", "Folder", "/media/usb/handover")]},
+    {"action": "abandon", "verb": "Withdraw a package", "title": "Withdraw a package",
+     "why": "The file stays on disk and the reason goes on the record; the records go back to waiting.",
+     "fields": [("package", "Package", "tx-…"), ("reason", "Reason", "wrong facility")]},
+]
+
+
+def apply_outbox_form(ws: Workspace, action: str, values: dict, operator: str) -> str:
+    from . import transmission
+
+    def g(name: str) -> str:
+        return (values.get(f"{action}__{name}") or "").strip()
+
+    at = datetime.now(timezone.utc)
+    if action == "package":
+        adapter = g("adapter") or "stub"
+        try:
+            pack = transmission.package(ws, at=at, adapter=adapter)
+        except transmission.OutboxError as exc:
+            raise ValueError(str(exc))
+        return (f"Sealed {pack.events} record(s) into {pack.path.name}. Nothing was sent; a package "
+                f"is a file a person can hand over.")
+    if action == "send":
+        try:
+            adapter = transmission.adapter_for(g("adapter") or "stub", folder=g("to") or None)
+            pack = transmission.hand_over(ws, g("package"), adapter=adapter, at=at)
+        except transmission.OutboxError as exc:
+            raise ValueError(str(exc))
+        if pack.state == transmission.HANDED_OVER:
+            return (f"{pack.id}: handed over to {g('to')}. Handed over is not delivered: no receipt "
+                    f"exists without a department adapter.")
+        return f"{pack.id}: {pack.result}. The records are still waiting."
+    if action == "abandon":
+        try:
+            pack = transmission.abandon(ws, g("package"), reason=g("reason"), at=at)
+        except transmission.OutboxError as exc:
+            raise ValueError(str(exc))
+        return f"{pack.id} withdrawn: {pack.result}. Its records are waiting again."
+    raise ValueError(f"no outbox action called {action!r}")
 
 
 def apply_setup_form(ws: Workspace, action: str, values: dict, operator: str):

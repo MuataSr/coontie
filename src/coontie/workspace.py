@@ -249,6 +249,20 @@ CREATE TABLE IF NOT EXISTS disposals (
     unit         TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS transmissions (
+    id               TEXT PRIMARY KEY,
+    envelope_path    TEXT NOT NULL,
+    envelope_sha256  TEXT NOT NULL,
+    first_seq        INTEGER NOT NULL,
+    last_seq         INTEGER NOT NULL,
+    events           INTEGER NOT NULL,
+    state            TEXT NOT NULL DEFAULT 'packaged',
+    adapter          TEXT NOT NULL DEFAULT '',
+    result           TEXT NOT NULL DEFAULT '',
+    reference        TEXT NOT NULL DEFAULT '',
+    attempt_at       TEXT,
+    created_at       TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,

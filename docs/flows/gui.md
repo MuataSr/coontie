@@ -283,3 +283,20 @@ table of the last five copies with their verification state.
 - **Restore is not on the screen, on purpose.** It overwrites a record and belongs on the command line
   with an explicit `--from` and `--db`. The page names the command and says a restore is never a
   button. Spec: `docs/flows/backup.md`.
+
+
+## Screen 11, Outbox: the twelve-hour rule made visible
+
+Added 2026-10-22 with the transmission increment.
+
+- **Today** gains one line above the findings when anything is owed: the count, the oldest age, the
+  window, and how many are past it. A red panel when any is late, a plain note when none is.
+- **`/outbox`** lists the waiting records oldest first (a queue that opens on the newest row hides what
+  is already late), then the packages with their state and what happened to each.
+- Three forms: seal the waiting records, hand a package over, withdraw a package with a reason.
+- The screen says, in the operator's words, that there is **no department adapter**, that a folder
+  hand-off copies a file, and that **handed over is not delivered**.
+- Restoring, transmitting and deleting are not buttons. The outbox makes no claim the record cannot
+  support, which is the rule the whole interface follows.
+- `coontie audit`'s "what this cannot check" now names the outbox rather than stopping at "no
+  credentials".

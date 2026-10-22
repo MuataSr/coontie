@@ -441,6 +441,107 @@ def cmd_api_user(args) -> int:
     return 0
 
 
+def cmd_outbox(args) -> int:
+    from . import transmission
+
+    ws = _ws(args)
+    try:
+        now = _now_arg(args.at)
+        from datetime import datetime, timezone
+        now = now or datetime.now(timezone.utc)
+        state = transmission.backlog(ws, now=now)
+        waiting = transmission.owed(ws, now=now)
+        print(f"{state['waiting']} record(s) not yet sent"
+              + (f", oldest {_human_age(state['oldest'])}" if state["waiting"] else ""))
+        if state["overdue"]:
+            print(f"{state['overdue']} of them are past the department's window")
+        for item in waiting[:12]:
+            mark = "OVERDUE" if item.overdue(now) else "waiting"
+            print(f"  {item.seq:5d}  {mark:8s} {local_iso(item.due_at)}  {item.title}")
+        if len(waiting) > 12:
+            print(f"  ... and {len(waiting) - 12} more")
+        made = transmission.packages(ws)
+        if made:
+            print()
+            print("packages:")
+            for pack in made:
+                print(f"  {pack.id}  {pack.state:12s} {pack.events:4d} record(s)  "
+                      f"{pack.path.name}")
+                if pack.result:
+                    print(f"      {pack.result}")
+        if not made:
+            print()
+            print("nothing has been sealed yet; `coontie transmit --package` writes a file a person "
+                  "can hand over")
+        print()
+        print("Coontie has no department adapter, so it cannot tell you whether a record arrived")
+        print("(DH5059 gives 12 hours by default, real time for dispensing and transfers)")
+    finally:
+        ws.close()
+    return 0
+
+
+def _human_age(delta) -> str:
+    total = int(delta.total_seconds())
+    days, rest = divmod(total, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    if days:
+        return f"{days} d {hours} h"
+    if hours:
+        return f"{hours} h {minutes} m"
+    return f"{minutes} m"
+
+
+def local_iso(moment) -> str:
+    """The operator's clock with the zone spelled out, the same rule the screens follow."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return moment.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M %Z")
+    except Exception:
+        return moment.isoformat()
+
+
+def cmd_transmit(args) -> int:
+    from . import transmission
+
+    ws = _ws(args)
+    try:
+        at = _now_arg(args.at)
+        if args.package:
+            try:
+                pack = transmission.package(ws, at=at, limit=args.limit, adapter=args.adapter)
+            except transmission.OutboxError as exc:
+                sys.exit(str(exc))
+            print(f"sealed {pack.events} record(s), sequences {pack.first_seq}-{pack.last_seq}")
+            print(f"  {pack.path}")
+            print(f"  sha256 {pack.sha256}")
+            print("nothing was sent; a package is a file, not a delivery")
+            return 0
+        if args.abandon:
+            try:
+                pack = transmission.abandon(ws, args.abandon, reason=args.reason or "", at=at)
+            except transmission.OutboxError as exc:
+                sys.exit(str(exc))
+            print(f"{pack.id} withdrawn: {pack.result}")
+            print("the records it carried are waiting again")
+            return 0
+        adapter = transmission.adapter_for(args.adapter, folder=args.to)
+        try:
+            pack = transmission.hand_over(ws, args.send, adapter=adapter, at=at)
+        except transmission.OutboxError as exc:
+            sys.exit(str(exc))
+        print(f"{pack.id} {pack.state}: {pack.result}")
+        if pack.state != transmission.HANDED_OVER:
+            print("the records are still waiting; seal a new package when the adapter can take it")
+        else:
+            print("handed over is not delivered: no receipt exists without a department adapter")
+    finally:
+        ws.close()
+    return 0
+
+
 def cmd_backup(args) -> int:
     from . import backup as backups
 
@@ -1592,6 +1693,22 @@ def build_parser() -> argparse.ArgumentParser:
                       help="used to derive a verifier; the plaintext is never stored")
     apiu.add_argument("--at")
     apiu.set_defaults(func=cmd_api_user)
+
+    obx = _db(sub.add_parser("outbox", help="what has not reached the department yet"))
+    obx.add_argument("--at")
+    obx.set_defaults(func=cmd_outbox)
+
+    txm = _db(sub.add_parser("transmit", help="seal what is owed, hand it over, or withdraw it"))
+    group = txm.add_mutually_exclusive_group(required=True)
+    group.add_argument("--package", action="store_true", help="seal the waiting records into one file")
+    group.add_argument("--send", metavar="PACKAGE", help="hand a sealed package to an adapter")
+    group.add_argument("--abandon", metavar="PACKAGE", help="withdraw a sealed package, with a reason")
+    txm.add_argument("--adapter", default="stub", choices=("stub", "folder"))
+    txm.add_argument("--to", help="the directory a folder hand-off writes into")
+    txm.add_argument("--limit", type=int, help="seal at most this many records")
+    txm.add_argument("--reason", help="why a package is being withdrawn")
+    txm.add_argument("--at")
+    txm.set_defaults(func=cmd_transmit)
 
     bak = _db(sub.add_parser("backup", help="copy the record so it can be restored"))
     bak.add_argument("--to", help="the directory to write the backup into")

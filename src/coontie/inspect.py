@@ -77,7 +77,9 @@ CANNOT_CHECK = (
     CannotCheck(
         "Records reaching the department within 12 hours",
         "Coontie holds no department API credentials, so it cannot report whether a record was "
-        "transmitted. It can prove what the record says.",
+        "transmitted. The outbox (`coontie outbox`, or the Outbox screen) says what is waiting, how "
+        "old it is, and what was handed to an adapter; handed over is not delivered, because nobody "
+        "confirmed that it arrived.",
     ),
     CannotCheck(
         "Patient status and purchase limits at the counter",

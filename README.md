@@ -383,6 +383,26 @@ required as a hidden field on every POST), `Origin` and `Host` checked on every 
 generated CSP that forbids scripts, and no binding outside loopback. The operator name is a claim
 for attribution; the OS login is the boundary.
 
+## The outbox: what has not reached the department
+
+DH5059 gives 28 event types a twelve-hour window and 5 a real-time one. Coontie has no department
+credentials, so it cannot know what the department holds, and it never pretends to:
+
+```bash
+coontie outbox                                    # what is waiting, how old, what is past the window
+coontie transmit --package                        # seal it into one file, with a hash and the chain head
+coontie transmit --send tx-1a2b --adapter folder --to /media/usb/handover
+coontie transmit --abandon tx-1a2b --reason "sealed against the wrong facility"
+```
+
+The package is a JSON envelope a person can hand to an integrator today: the records, their payloads,
+the first and last sequence number, the chain head, and a sha256 over the whole thing. **Handed over is
+not delivered**: the folder adapter copies the file and says so, the default adapter refuses outright,
+and neither word "delivered" appears anywhere in this build.
+
+Today says `N records not yet sent. Oldest 20 d 22 h; the department's window is 12 hours.` above the
+findings, and there is an Outbox screen with the same numbers. Spec: `docs/flows/transmission.md`.
+
 ## A month through the record, before anyone signs up
 
 ```bash
