@@ -441,6 +441,53 @@ def cmd_api_user(args) -> int:
     return 0
 
 
+def cmd_theme(args) -> int:
+    from . import theme
+
+    ws = _ws(args)
+    if args.set:
+        if not (args.look and args.voice):
+            sys.exit("give --look and --voice; `coontie theme --list` shows the names")
+        try:
+            chosen = ws.set_appearance(look=args.look, voice=args.voice, actor=args.actor or "")
+        except ValueError as exc:
+            sys.exit(str(exc))
+        print(f"look {chosen['look']}, voice {chosen['voice']} recorded"
+              f"{' by ' + chosen['set_by'] if chosen['set_by'] else ''}")
+        print("the choice is on the ledger; the record, the exports and the printed pages are unchanged")
+        ws.close()
+        return 0
+
+    if args.check:
+        problems = theme.check_all()
+        for key, term in theme.TERMS.items():
+            if not theme.catalogue_reference(term):
+                problems.append(f"{key} points at {term}, which the record cannot cite")
+        chosen = ws.appearance()
+        print(f"installed: look {chosen['look']}, voice {chosen['voice']}")
+        for line in problems:
+            print(f"  {line}")
+        print("the look and voice layer holds" if not problems else f"{len(problems)} problem(s)")
+        ws.close()
+        return 0 if not problems else 1
+
+    chosen = ws.appearance()
+    print(f"installed: look {chosen['look']}, voice {chosen['voice']}")
+    print()
+    print("looks:")
+    for name in sorted(theme.SKINS):
+        mark = "*" if name == chosen["look"] else " "
+        print(f" {mark} {name:10s} {theme.SKIN_TITLES.get(name, '')}")
+    print("voices:")
+    for name in ["canonical", *sorted(theme.VOICES)]:
+        mark = "*" if name == chosen["voice"] else " "
+        print(f" {mark} {name:10s} {theme.VOICE_TITLES.get(name, '')}")
+    print()
+    print("coontie theme --set --look calm --voice shop --actor \"Maria Lopez\"")
+    ws.close()
+    return 0
+
+
 def cmd_link(args) -> int:
     ws = _ws(args)
     try:
@@ -1483,6 +1530,15 @@ def build_parser() -> argparse.ArgumentParser:
                       help="used to derive a verifier; the plaintext is never stored")
     apiu.add_argument("--at")
     apiu.set_defaults(func=cmd_api_user)
+
+    thm = _db(sub.add_parser("theme", help="the look and the voice of the screens"))
+    thm.add_argument("--list", action="store_true", help="what can be installed")
+    thm.add_argument("--set", action="store_true", help="install a look and a voice")
+    thm.add_argument("--look")
+    thm.add_argument("--voice")
+    thm.add_argument("--actor", help="who chose it; the choice goes on the record")
+    thm.add_argument("--check", action="store_true", help="prove the installed ones, and the built-ins, hold")
+    thm.set_defaults(func=cmd_theme)
 
     lnk = _db(sub.add_parser("link", help="attach the department inventory id to a lot"))
     lnk.add_argument("--lot", required=True)

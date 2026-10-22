@@ -278,7 +278,12 @@ def brief(ws, *, now: datetime | None = None, days: int = 7) -> str:
     def count(sql: str, args: tuple = ()) -> int:
         return int(ws.conn.execute(sql, args).fetchone()[0])
 
-    events = count("SELECT COUNT(*) FROM events WHERE occurred_at >= ?", (since_text,))
+    # a settings change is on the ledger for the audit trail, but it is not a facility record:
+    # counting it here would report "6 records" one day and "7" after someone changed the colours
+    events = count(
+        "SELECT COUNT(*) FROM events WHERE occurred_at >= ? AND event_key <> 'appearance_chosen'",
+        (since_text,),
+    )
     if events == 0:
         return f"Nothing was recorded in the {days} days to {now.date().isoformat()}."
 

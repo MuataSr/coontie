@@ -49,6 +49,7 @@ access rather than on effort.
 | `src/coontie/outage.py` | The disconnection clock, the notice and restoration drafts, and the outage CSV |
 | `src/coontie/driftfeed.py` | Reads the department's export through aliases; normalises statuses, units and quantities |
 | `src/coontie/web.py` | The appliance interface: ten screens, one session token, loopback only, standard library |
+| `src/coontie/theme.py` | Looks and voices: CSS tokens, label packs, and the checker that keeps a third-party skin honest |
 | `src/coontie/people.py` | Employees and API users, and the password-to-verifier derivation that keeps secrets out of the ledger |
 | `src/coontie/cultivation.py` | Batches, plants, the schedule-before-harvest rule, the 72-hour disposal wait, harvest arithmetic |
 | `src/coontie/processing.py` | Cure, lot conservation, conversions, ingredients, samples, final products, the immutable expiration |
@@ -381,6 +382,30 @@ Security on a loopback interface: a session token minted at startup (HttpOnly, S
 required as a hidden field on every POST), `Origin` and `Host` checked on every request, a
 generated CSP that forbids scripts, and no binding outside loopback. The operator name is a claim
 for attribution; the OS login is the boundary.
+
+## One program, three looks, four voices
+
+The record is one program with one skeleton. An operator can install a look and a voice, and a third
+party can ship their own, because both layers are data rather than markup:
+
+```bash
+coontie theme                                        # what is installed, and what else exists
+coontie theme --set --look contrast --voice shop --actor "Maria Lopez"
+coontie theme --check                                # prove the pair holds
+```
+
+Looks are CSS custom properties only (`calm`, `contrast`, `touch`), so the same DOM is under every
+one and the tests that prove the interface behave prove all three. Voices are dictionaries
+(`canonical`, `quiet`, `shop`, `official`); a voice renames what a person reads and cannot rename a
+field the department reads.
+
+**Evidence is never themed.** The manifest, the printed audit and every export keep the department's
+words and one black-on-white layout whichever skin is installed. If a theme could print a manifest in
+10 pt grey, the theme would have damaged an inspection.
+
+The choice goes on the ledger as `appearance_chosen` with who made it, and it is deliberately not
+counted in "records written this week": changing the colours is not a facility record. The whole
+contract, including what the checker refuses, is in `docs/flows/themes.md`.
 
 ## Develop
 

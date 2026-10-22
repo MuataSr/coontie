@@ -249,6 +249,12 @@ CREATE TABLE IF NOT EXISTS disposals (
     unit         TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    set_by     TEXT NOT NULL DEFAULT '',
+    set_at     TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS employees (
     id            TEXT PRIMARY KEY,
     full_name     TEXT NOT NULL,
@@ -733,6 +739,55 @@ class Workspace:
             raise ValueError(f"no justification {justification_id!r}")
         self.conn.commit()
         return self._justification_row(justification_id)
+
+    # -- appearance: one look and one voice, recorded rather than toggled ------
+
+    def appearance(self) -> dict:
+        """The installed look and voice. Defaults when nothing has been chosen."""
+        from . import theme
+
+        found = {r["key"]: r["value"] for r in self.conn.execute("SELECT key,value FROM settings")}
+        look = found.get("look", theme.DEFAULT_SKIN)
+        voice = found.get("voice", theme.DEFAULT_VOICE)
+        if look not in theme.SKINS:
+            look = theme.DEFAULT_SKIN
+        if voice not in theme.VALID_VOICES:
+            voice = theme.DEFAULT_VOICE
+        row = self.conn.execute(
+            "SELECT set_by, set_at FROM settings WHERE key = 'look'").fetchone()
+        return {"look": look, "voice": voice,
+                "set_by": (row["set_by"] if row else ""),
+                "set_at": (row["set_at"] if row else "")}
+
+    def set_appearance(self, *, look: str, voice: str, actor: str = "",
+                       at: datetime | None = None) -> dict:
+        """Choose the look and voice for this install, and write the choice to the record."""
+        from . import theme
+
+        if look not in theme.SKINS:
+            raise ValueError(f"no skin called {look!r}; the skins are {', '.join(sorted(theme.SKINS))}")
+        if voice not in theme.VALID_VOICES:
+            raise ValueError(f"no voice called {voice!r}; the voices are "
+                             f"{', '.join(theme.VALID_VOICES)}")
+        problems = theme.check_skin(look, theme.SKINS[look])
+        if voice in theme.VOICES:
+            problems += theme.check_voice(voice, theme.VOICES[voice])
+        if problems:
+            raise ValueError("that choice does not pass its own check: " + "; ".join(problems))
+        at = at or datetime.now(timezone.utc)
+        who = (actor or "").strip()
+        self.conn.execute(
+            "INSERT INTO settings (key,value,set_by,set_at) VALUES ('look',?,?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value, set_by=excluded.set_by,"
+            " set_at=excluded.set_at", (look, who, at.isoformat()))
+        self.conn.execute(
+            "INSERT INTO settings (key,value,set_by,set_at) VALUES ('voice',?,?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value, set_by=excluded.set_by,"
+            " set_at=excluded.set_at", (voice, who, at.isoformat()))
+        self.conn.commit()
+        self.ledger.append("appearance_chosen",
+                           {"look": look, "voice": voice, "set_by": who}, at)
+        return self.appearance()
 
     # -- people (DH5059 admin events) ----------------------------------------
 

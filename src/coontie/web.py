@@ -214,7 +214,11 @@ def local_time(moment) -> str:
 
 def page(*, title: str, body: str, here: str = "", facility: str = "", operator: str = "",
          token: str = "", badge: tuple[int, str] | None = None,
-         badge_label: str = "open") -> str:
+         badge_label: str = "open", look: str = "", voice: str = "") -> str:
+    from . import theme
+
+    look = look or theme.DEFAULT_SKIN
+    voice = voice or theme.DEFAULT_VOICE
     rail = "".join(
         f'<a href="{esc(path)}" accesskey="{key}" class="{"here" if path == here else ""}">'
         f"{esc(label)}</a>"
@@ -228,7 +232,7 @@ def page(*, title: str, body: str, here: str = "", facility: str = "", operator:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{esc(title)} · Coontie</title><style>{CSS}</style></head>
+<title>{esc(title)} · Coontie</title><style>{theme.css_for(look)}</style></head>
 <body>
 <header>
   <span class="name">{esc(facility or "Coontie")}</span>
@@ -251,7 +255,7 @@ def page(*, title: str, body: str, here: str = "", facility: str = "", operator:
 </body></html>"""
 
 
-def _finding_link(finding, commands: dict[str, str]) -> str:
+def _finding_link(finding, commands: dict[str, str], label: str = "fix") -> str:
     """A finding links to the screen that fixes it, or names the command if that screen is not built."""
     target = commands.get(finding.code)
     if not target:
@@ -382,6 +386,11 @@ SETUP_FORMS = [
      "fields": [("email", "Email", "robot@example.com"),
                 ("password", "Password", "at least eight characters", "password"),
                 ("permissions", "Permissions", "inventory.read, transport.write")]},
+    {"action": "appearance", "verb": "Choose the look and voice", "title": "The look and the voice",
+     "why": "The record does not change; only what the operator reads. Calm, contrast or touch, "
+            "and a voice: canonical, quiet, shop or official.",
+     "fields": [("look", "Look", "calm, contrast or touch"),
+                ("voice", "Voice", "canonical, quiet, shop or official")]},
     {"action": "import", "verb": "Import a spreadsheet", "title": "Import the incumbent export",
      "why": "Paste the CSV. Dry run first: nothing is written until you run it for real.",
      "fields": [("csv", "CSV", "")], "textarea": "csv"},
@@ -582,6 +591,34 @@ class App:
         self.db_path = Path(db_path)
         self.token = secrets.token_urlsafe(24)
         self.lock = threading.Lock()
+        self.reload_appearance()
+
+    def reload_appearance(self) -> None:
+        from . import theme
+
+        try:
+            ws = Workspace(self.db_path)
+            try:
+                chosen = ws.appearance()
+            finally:
+                ws.close()
+        except sqlite3.Error:
+            chosen = {"look": theme.DEFAULT_SKIN, "voice": theme.DEFAULT_VOICE}
+        self.look = chosen["look"]
+        self.voice = chosen["voice"]
+
+    def say(self, key: str) -> str:
+        from . import theme
+
+        return theme.say(self.voice, key)
+
+    def speak(self, text: str) -> str:
+        from . import theme
+
+        return theme.speak(text, self.voice)
+
+    def _page(self, **kwargs) -> str:
+        return page(look=self.look, voice=self.voice, **kwargs)
 
     # -- pages ---------------------------------------------------------------
 
@@ -590,10 +627,14 @@ class App:
         findings = inspect(ws, now=now)
         counts = summarize(findings)
         facility = ws.facility()
-        body = ['<h1>Today</h1>',
-                f'<p class="lede">{esc(local_time(now))}</p>']
+        lede = self.say("today.lede")
+        body = [f"<h1>{esc(self.say('today.heading'))}</h1>"]
+        if lede:
+            body.append(f'<p class="lede">{esc(lede)}</p>')
+        body.append(f'<p class="{"lede" if not lede else "context"}">{esc(local_time(now))}</p>')
 
-        groups = [(BREACH, "Breaches"), (EXPOSURE, "Exposures"), (NOTE, "Notes")]
+        groups = [(BREACH, self.say("today.breaches")), (EXPOSURE, self.say("today.exposures")),
+                  (NOTE, self.say("today.notes"))]
         any_rows = False
         for severity, heading in groups:
             rows = [f for f in findings if f.severity == severity]
@@ -602,7 +643,7 @@ class App:
             any_rows = True
             body.append(f"<h2>{esc(heading)}</h2><ul class='findings'>")
             for f in rows:
-                link = _finding_link(f, FIX_ROUTES)
+                link = _finding_link(f, FIX_ROUTES, self.say("finding.fix"))
                 cite = f'<span class="cite">({esc(f.citation)})</span>' if f.citation else ""
                 # the subject is usually already inside the summary; repeating it reads as debug output
                 where = (f'<span class="cite">{esc(f.subject)}</span>'
@@ -621,9 +662,9 @@ class App:
         due = self._due(ws, now)
         if due:
             any_rows = True
-            body.append("<h2>Due</h2><ul class='findings'>")
+            body.append(f"<h2>{esc(self.say('today.due'))}</h2><ul class='findings'>")
             for line in due:
-                body.append(f"<li>{line}</li>")
+                body.append(f"<li>{self.speak(line)}</li>")
             body.append("</ul>")
 
         if not any_rows:
@@ -632,12 +673,15 @@ class App:
                 "<a href='/audit'>Audit</a> lists what this record can and cannot check.</div>"
             )
 
-        body.append("<h2>This week</h2>")
-        body.append(f"<p class='context'>{prose(brief(ws, now=now, days=7))}</p>")
+        body.append(f"<h2>{esc(self.say('today.week'))}</h2>")
+        body.append(f"<p class='context'>{prose(self.speak(brief(ws, now=now, days=7)))}</p>")
         body.append("<footer>coontie audit</footer>")
-        return page(title="Today", body="\n".join(body), here="/", operator=operator,
-                    facility=facility.name if facility else "", token=self.token,
-                    badge=(counts[BREACH] + counts[EXPOSURE], "/audit"))
+        return self._page(
+            title=self.say("today.heading"), body="\n".join(body), here="/", operator=operator,
+            facility=facility.name if facility else "", token=self.token,
+            badge=(counts[BREACH] + counts[EXPOSURE], "/audit"),
+            badge_label=self.say("badge.label"),
+        )
 
     def _due(self, ws: Workspace, now: datetime) -> list[str]:
         out: list[str] = []
@@ -704,7 +748,7 @@ class App:
                     "above is the path.</div>"
                 )
             body.append("<footer>coontie say — nothing written</footer>")
-        return page(title="Say it", body="\n".join(body), here="/say", operator=operator,
+        return self._page(title="Say it", body="\n".join(body), here="/say", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
     def render_inventory(self, ws: Workspace, operator: str, params: dict, *,
@@ -837,7 +881,7 @@ class App:
                             suggested=suggested.get(spec["action"], {}))
                  for spec in INVENTORY_FORMS]
         body.append("<footer>coontie move --lot · dispose --lot</footer>")
-        return page(title="Inventory", body="\n".join(body), here="/inventory", operator=operator,
+        return self._page(title="Inventory", body="\n".join(body), here="/inventory", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
     # -- Plant and Process ---------------------------------------------------
@@ -969,7 +1013,7 @@ class App:
                             suggested=suggest.get(spec["action"], {}))
                  for index, spec in enumerate(PLANT_FORMS)]
         body.append("<footer>coontie batch · plant · move · additive · schedule · harvest</footer>")
-        return page(title="Plant", body="\n".join(body), here="/plant", operator=operator,
+        return self._page(title="Plant", body="\n".join(body), here="/plant", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
     def render_process(self, ws: Workspace, operator: str, *, values: dict | None = None,
@@ -996,7 +1040,7 @@ class App:
                  for index, spec in enumerate(PROCESS_FORMS)]
         body.append("<footer>coontie cure · lot · split · convert · ingredient · sample · final · "
                     "device · adjust</footer>")
-        return page(title="Process", body="\n".join(body), here="/process", operator=operator,
+        return self._page(title="Process", body="\n".join(body), here="/process", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
 
@@ -1074,7 +1118,7 @@ class App:
                             suggested=suggested.get(spec["action"], {}))
                  for spec in TRANSPORT_FORMS]
         body.append("<footer>coontie vehicle · manifest · dispatch · receive · invoice</footer>")
-        return page(title="Transport", body="\n".join(body), here="/transport", operator=operator,
+        return self._page(title="Transport", body="\n".join(body), here="/transport", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
     def _correct_rows(self, ws: Workspace) -> str:
@@ -1134,7 +1178,7 @@ class App:
                             suggested=suggested.get(spec["action"], {}))
                  for index, spec in enumerate(CORRECT_FORMS)]
         body.append("<footer>coontie amend · justify --send</footer>")
-        return page(title="Correct", body="\n".join(body), here="/correct", operator=operator,
+        return self._page(title="Correct", body="\n".join(body), here="/correct", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
 
@@ -1252,7 +1296,7 @@ class App:
                             open_it=(not facility and spec["action"] == "facility"))
                  for spec in SETUP_FORMS]
         body.append("<footer>coontie init · room · import · export dh5058 · verify</footer>")
-        return page(title="Setup", body="\n".join(body), here="/setup", operator=operator,
+        return self._page(title="Setup", body="\n".join(body), here="/setup", operator=operator,
                     facility=(facility.name if facility else ""), token=self.token)
 
     def render_audit(self, ws: Workspace, operator: str) -> str:
@@ -1315,7 +1359,7 @@ class App:
             body.append(f"<li><strong>{esc(item.area)}</strong>: {esc(item.why)}</li>")
         body.append("</ul>")
         body.append("<footer>coontie audit</footer>")
-        return page(title="Audit", body="\n".join(body), here="/audit", operator=operator,
+        return self._page(title="Audit", body="\n".join(body), here="/audit", operator=operator,
                     facility=(facility.name if facility else ""), token=self.token,
                     badge=(counts[BREACH] + counts[EXPOSURE], "/audit"))
 
@@ -1412,7 +1456,7 @@ class App:
             f"<button type='submit'>Read it and compare</button></form>"
         )
         body.append("<footer>coontie drift pull · link · resolve</footer>")
-        return page(title="Drift", body="\n".join(body), here="/drift", operator=operator,
+        return self._page(title="Drift", body="\n".join(body), here="/drift", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token,
                     badge=(decisions, "/drift"), badge_label="to decide")
 
@@ -1817,6 +1861,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/setup":
             action = (form.get("action") or [""])[0]
             values = {k: v[0] for k, v in form.items() if k != "token"}
+            if action == "appearance" and self.app is not None:
+                self.app.reload_appearance()
             ws = self._ws()
             try:
                 outcome = apply_setup_form(ws, action, values, self._operator())
@@ -1859,7 +1905,7 @@ class Handler(BaseHTTPRequestHandler):
         body = [f"<h1>{esc(label)}</h1>",
                 "<div class='note'>This screen is specified in <code>docs/flows/gui.md</code> and "
                 "arrives in a later build step. Until then the command line is the path.</div>"]
-        return page(title=label, body="\n".join(body), here=path, operator=operator,
+        return self._page(title=label, body="\n".join(body), here=path, operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.app.token)
 
 
@@ -2055,6 +2101,10 @@ def apply_setup_form(ws: Workspace, action: str, values: dict, operator: str):
             is_quarantine=g("quarantine").lower() in {"yes", "y", "true", "1"},
         ))
         return f"Room {room.name} added as a {room.kind} room."
+    if action == "appearance":
+        chosen = ws.set_appearance(look=g("look"), voice=g("voice"), actor=operator)
+        return (f"Look {chosen['look']}, voice {chosen['voice']}. The record is unchanged; "
+                f"the screens and the printed evidence keep their own rules.")
     if action == "employee":
         employee = ws.add_employee(
             full_name=g("name"), date_of_birth=g("dob"), hire_date=g("hired"), email=g("email"),
