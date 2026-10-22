@@ -195,9 +195,11 @@ until it is marked sent, because a draft is not compliance.
 
 ## Screen 8: Drift
 
-The page S4 already built, folded into the rail. Same five resolutions (accept state, keep local,
-recount, record missing lot, re-send), same "no sync button" rule, same note that a lot with no
-department id cannot be compared and is counted out loud rather than dropped.
+**Built 2026-10-21.** The five resolutions (use the department's value, keep ours, recount, add it
+here, send it again), posted as forms that carry the session token. "No sync button" holds: each
+button writes one decision to the ledger. Differences show **only the fields that differ**, with
+"not held here" / "not in the export" where a side is empty, and the lots with no department id are
+counted at the top so the badge never overstates what is settled.
 
 **Records:** `drift_resolution`.
 

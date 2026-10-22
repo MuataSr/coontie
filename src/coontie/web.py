@@ -102,6 +102,11 @@ p.chips { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
 p.chips a { font-size:13px; text-decoration:none; border:1px solid var(--line); border-radius:999px;
             padding:3px 10px; background:var(--card); }
 p.chips a:hover { background:#eef2f6; }
+form.inline { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:0; }
+form.inline button { margin:0; padding:5px 10px; font-size:13px; }
+form.inline input[type=text], form.inline input[type=number] { width:auto; }
+form.job-open { background:var(--card); border:1px solid var(--line); border-radius:8px;
+                padding:14px 16px; max-width:640px; }
 form.filters { margin:0 0 6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 details.job { background:var(--card); border:1px solid var(--line); border-radius:8px;
               margin:10px 0; max-width:640px; }
@@ -157,7 +162,7 @@ RAIL = [
 # the command instead, so the interface never offers a dead link.
 BUILT = {"/": "Today", "/say": "Say it", "/inventory": "Inventory", "/plant": "Plant",
          "/process": "Process", "/transport": "Transport", "/correct": "Correct",
-         "/audit": "Audit", "/setup": "Setup", "/operator": "Operator"}
+         "/drift": "Drift", "/audit": "Audit", "/setup": "Setup", "/operator": "Operator"}
 
 
 def esc(value) -> str:
@@ -193,7 +198,8 @@ def prose(text) -> str:
 
 
 def page(*, title: str, body: str, here: str = "", facility: str = "", operator: str = "",
-         token: str = "", badge: tuple[int, str] | None = None) -> str:
+         token: str = "", badge: tuple[int, str] | None = None,
+         badge_label: str = "open") -> str:
     rail = "".join(
         f'<a href="{esc(path)}" accesskey="{key}" class="{"here" if path == here else ""}">'
         f"{esc(label)}</a>"
@@ -203,7 +209,7 @@ def page(*, title: str, body: str, here: str = "", facility: str = "", operator:
     if badge is not None:
         count, target = badge
         badge_html = (f'<a class="badge{" hot" if count else ""}" href="{esc(target)}">'
-                      f"{count} open</a>")
+                      f"{count} {esc(badge_label)}</a>")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1209,6 +1215,156 @@ class App:
                     badge=(counts[BREACH] + counts[EXPOSURE], "/audit"))
 
 
+    # -- Drift ---------------------------------------------------------------
+
+    def render_drift(self, ws: Workspace, operator: str, *, values: dict | None = None,
+                     error: str = "", done: str = "") -> str:
+        values = values or {}
+        snapshot = ws.latest_snapshot()
+        findings = ws.drift_findings(open_only=True) if snapshot else []
+        resolved = [f for f in (ws.drift_findings(open_only=False) if snapshot else [])
+                    if f["resolution"]][-6:]
+
+        unlinked = ws.unlinked_lots()
+        decisions = len(findings) + len(unlinked)
+        body = ["<h1>Drift</h1>",
+                "<p class='lede'>What the department's export says against what this record says. "
+                "There is no sync button: every difference is a decision, and the decision is "
+                "written down.</p>",
+                f"<p class='context'>{_counting(len(findings), 'difference', 'differences')} and "
+                f"{_counting(len(unlinked), 'lot', 'lots')} with no department id: "
+                f"{_counting(decisions, 'decision', 'decisions')} on this page.</p>"]
+        if done:
+            body.append(f"<div class='note'>{esc(done)}</div>")
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
+
+        if snapshot:
+            body.append(f"<h2>The last export</h2><p class='context'>"
+                        f"{esc(str(snapshot.get('source_file') or 'pasted export'))}, as of "
+                        f"{esc(str(snapshot.get('as_of'))[:16].replace('T', ' '))}, "
+                        f"{_counting(len(findings), 'open difference', 'open differences')}.</p>")
+        else:
+            body.append("<div class='note'>No department export has been read yet. Paste one below; "
+                        "the record keeps the raw rows it was given.</div>")
+
+        if unlinked:
+            body.append(f"<h2>Lots with no department id ({len(unlinked)})</h2>")
+            body.append("<p class='context'>A lot with no department id cannot be compared, so it "
+                        "is counted here rather than dropped.</p>")
+            body.append("<table><thead><tr><th>Lot</th><th>Product</th><th class='num'>Quantity</th>"
+                        "<th>Department id</th></tr></thead><tbody>")
+            for lot in unlinked:
+                body.append(
+                    f"<tr><td class='ident'>{esc(lot.id)}</td><td>{esc(lot.product_id)}</td>"
+                    f"<td class='num'>{esc(lot.quantity)} {esc(lot.unit)}</td>"
+                    f"<td><form method='post' class='inline'>"
+                    f"<input type='hidden' name='token' value='{esc(self.token)}'>"
+                    f"<input type='hidden' name='action' value='link'>"
+                    f"<input type='hidden' name='link__lot' value='{esc(lot.id)}'>"
+                    f"<input type='text' name='link__sts' placeholder='department id' size='14'>"
+                    f"<button type='submit' class='quiet'>Link</button></form></td></tr>"
+                )
+            body.append("</tbody></table>")
+
+        if findings:
+            body.append(f"<h2>Open differences ({len(findings)})</h2>")
+            body.append("<table><thead><tr><th>What</th><th>This record</th><th>The department</th>"
+                        "<th>Decide</th></tr></thead><tbody>")
+            for f in findings:
+                ours, theirs = self._diff_cells(f)
+                actions = self._drift_actions(f, values)
+                body.append(
+                    f"<tr><td><strong>{esc(f['kind'].replace('_', ' '))}</strong><br>"
+                    f"<span class='cite'>{esc(f['record_key'])}</span>"
+                    + (f"<br><span class='cite'>{esc(f['note'])}</span>" if f["note"] else "")
+                    + f"</td><td>{ours}</td><td>{theirs}</td>"
+                    f"<td>{actions}</td></tr>"
+                )
+            body.append("</tbody></table>")
+            body.append("<p class='context'>Each button records the decision on the ledger as soon as "
+                        "it is pressed. Nothing is deleted, and nothing is sent to the department "
+                        "from here.</p>")
+
+        if resolved:
+            body.append("<h2>Settled</h2><ul class='findings'>")
+            for f in resolved:
+                body.append(f"<li><span class='sev note'>{esc(f['resolution'].replace('_', ' '))}</span>"
+                            f"{esc(f['record_key'])} "
+                            f"<span class='cite'>at {esc(str(f['resolved_at'])[:16].replace('T', ' '))}"
+                            f"</span></li>")
+            body.append("</ul>")
+
+        body.append("<h2>Read a new export</h2>")
+        from .driftview import render as _unused  # noqa: F401  (kept: the CLI page still serves)
+
+        body.append(
+            f"<form method='post' class='job-open'>"
+            f"<input type='hidden' name='token' value='{esc(self.token)}'>"
+            f"<input type='hidden' name='action' value='pull'>"
+            f"<label for='pull_text'>Paste the department's CSV</label>"
+            f"<textarea id='pull_text' name='pull__text' rows='8' "
+            f"placeholder='Inventory ID,Product Name,Quantity,UOM,Status,Room,Notes'>"
+            f"{esc(values.get('pull__text', ''))}</textarea>"
+            f"<button type='submit'>Read it and compare</button></form>"
+        )
+        body.append("<footer>coontie drift pull · link · resolve</footer>")
+        return page(title="Drift", body="\n".join(body), here="/drift", operator=operator,
+                    facility=(ws.facility().name if ws.facility() else ""), token=self.token,
+                    badge=(decisions, "/drift"), badge_label="to decide")
+
+    def _diff_cells(self, finding: dict) -> tuple[str, str]:
+        """Show the fields that actually differ, one line each, ours on the left."""
+        ours = finding["ours"] or {}
+        theirs = finding["theirs"] or {}
+        changed = [key for key in sorted(set(ours) | set(theirs))
+                   if ours.get(key) != theirs.get(key)]
+        # what kind of thing it is, and its size, are context rather than the difference
+        for noisy in ("lot_id", "product", "unit", "room"):
+            if noisy in changed and len(changed) > 1:
+                changed.remove(noisy)
+        if not changed:
+            return ("nothing differs", "nothing differs")
+        rows_ours, rows_theirs = [], []
+        for key in changed:
+            mine = ours.get(key)
+            other = theirs.get(key)
+            rows_ours.append(
+                f"<div>{esc(key)}: <strong>{esc(mine) if mine not in (None, '') else 'not held here'}</strong></div>")
+            rows_theirs.append(
+                f"<div>{esc(key)}: <strong>{esc(other) if other not in (None, '') else 'not in the export'}</strong></div>")
+        return ("".join(rows_ours), "".join(rows_theirs))
+
+    def _drift_actions(self, finding: dict, values: dict) -> str:
+        """The five decisions, and only the ones that apply to this kind of difference."""
+        fid = esc(finding["id"])
+        kind = finding["kind"]
+        token = esc(self.token)
+        head = (f"<form method='post' class='inline'>"
+                f"<input type='hidden' name='token' value='{token}'>"
+                f"<input type='hidden' name='action' value='resolve'>"
+                f"<input type='hidden' name='resolve__finding' value='{fid}'>")
+        out = [head]
+        if kind in ("quantity_mismatch", "status_mismatch"):
+            out.append("<button type='submit' name='resolve__act' value='accept_state' "
+                       "title='write the department value into this record'>Use the department's"
+                       " value</button>")
+        if kind == "quantity_mismatch":
+            out.append("<input type='number' step='0.001' name='resolve__quantity' "
+                       "placeholder='counted' style='width:90px'>"
+                       "<button type='submit' name='resolve__act' value='recount'>Recount</button>")
+        if kind == "missing_locally":
+            out.append("<button type='submit' name='resolve__act' value='record_state' "
+                       "title='create the record here from the export'>Add it here</button>")
+        if kind == "missing_at_state":
+            out.append("<button type='submit' name='resolve__act' value='resend' "
+                       "title='the department lost a record we hold'>Send it again</button>")
+        out.append("<button type='submit' class='quiet' name='resolve__act' value='keep_local' "
+                   "title='change nothing here and record the difference'>Keep ours, noted</button>"
+                   "</form>")
+        return "".join(out)
+
+
     def _vocabulary(self, ws: Workspace) -> dict:
         lots = [(lot.id, lot.cultivar) for lot in ws.stock_lots()]
         cultivars = tuple(sorted({c for _i, c in lots if c}))
@@ -1359,6 +1515,16 @@ class Handler(BaseHTTPRequestHandler):
                 ws.close()
             self._send(200, body, headers=self._session_cookie())
             return
+        if path == "/drift":
+            params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
+                                                 keep_blank_values=True))
+            ws = self._ws()
+            try:
+                body = self.app.render_drift(ws, operator, done=params.get("done", ""))
+            finally:
+                ws.close()
+            self._send(200, body, headers=self._session_cookie())
+            return
         if path == "/setup":
             params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
                                                  keep_blank_values=True))
@@ -1490,6 +1656,28 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             self.send_response(303)
             self.send_header("Location", f"{path}?done={urllib.parse.quote(summary)}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        if path == "/drift":
+            action = (form.get("action") or [""])[0]
+            values = {k: v[0] for k, v in form.items() if k != "token"}
+            ws = self._ws()
+            try:
+                summary = apply_drift_form(ws, action, values, self._operator())
+            except ValueError as exc:
+                body = self.app.render_drift(ws, self._operator(), values=values, error=str(exc))
+                ws.close()
+                self._send(200, body, headers=self._session_cookie())
+                return
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            self.send_response(303)
+            self.send_header("Location", f"/drift?done={urllib.parse.quote(summary)}")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -1749,6 +1937,35 @@ def apply_setup_form(ws: Workspace, action: str, values: dict, operator: str):
         path.write_text(text, encoding="utf-8")
         return import_csv(ws, path, facility_id=facility.id, dry_run=dry_run)
     raise ValueError(f"no setup form called {action!r}")
+
+
+
+def apply_drift_form(ws: Workspace, action: str, values: dict, operator: str) -> str:
+    def g(name: str) -> str:
+        return (values.get(f"{action}__{name}") or "").strip()
+
+    if action == "pull":
+        text = values.get("pull__text") or ""
+        if not text.strip():
+            raise ValueError("paste the export first")
+        snapshot_id, rows, rejected = ws.pull_state(text, source_file="pasted export")
+        ws.compare_drift(snapshot_id)      # reading an export is not comparing it
+        findings = ws.drift_findings(snapshot_id, open_only=True)
+        tail = f", {_counting(rejected, 'row that could not be read', 'rows that could not be read')}" \
+            if rejected else ""
+        return (f"Read {_counting(rows, 'row', 'rows')} from the department's export{tail}; "
+                f"{_counting(len(findings), 'difference', 'differences')} to decide.")
+    if action == "link":
+        ws.link_lot(g("lot"), g("sts"))
+        return f"Lot {g('lot')} linked to {g('sts')}."
+    if action == "resolve":
+        act = g("act")
+        quantity = g("quantity") or None
+        note = g("note")
+        finding = ws.resolve_finding(g("finding"), act, quantity=quantity, note=note,
+                                     actor=operator)
+        return f"{finding['record_key']} settled: {act.replace('_', ' ')}."
+    raise ValueError(f"no drift action called {action!r}")
 
 
 
