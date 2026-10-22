@@ -119,11 +119,24 @@ details.job input[type=text], details.job select { width:100%; padding:9px 10px;
 form.filters input[type=text] { width:120px; }
 th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:14px; }
 .muted { color:var(--muted); }
+.printonly { display:none; }
 @media print {
+  @page { margin:18mm 16mm; }
+  .printonly { display:block !important; }
+  .printonly h1 { font-size:19pt; margin:0 0 2mm; }
+  .printonly .chain { font-size:9pt; color:#000; }
+  .printonly .signoff { margin-top:6mm; font-size:10pt; }
   header, nav, footer, form, button { display:none !important; }
   main { max-width:none; padding:0; }
   body { background:#fff; }
-  h2 { page-break-after:avoid; }
+  h2 { page-break-after:avoid; border-bottom:1px solid #000; }
+  /* emphasis must survive a printer that drops background colours */
+  .sev { color:#000 !important; background:#fff !important; border:1px solid #000 !important;
+         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  ul.findings li.row { border-left-color:#000 !important; page-break-inside:avoid; }
+  .cite, .meta { color:#333; }
+  a { color:#000; text-decoration:none; }
+  pre.lineage { border:1px solid #000; background:#fff; color:#000; }
 }
 """
 
@@ -144,11 +157,29 @@ RAIL = [
 # the command instead, so the interface never offers a dead link.
 BUILT = {"/": "Today", "/say": "Say it", "/inventory": "Inventory", "/plant": "Plant",
          "/process": "Process", "/transport": "Transport", "/correct": "Correct",
-         "/audit": "Audit", "/operator": "Operator"}
+         "/audit": "Audit", "/setup": "Setup", "/operator": "Operator"}
 
 
 def esc(value) -> str:
     return html.escape("" if value is None else str(value), quote=True)
+
+
+def _lot_about(ws: Workspace, subject) -> str:
+    """What a lot is, in words, so a finding is not only an identifier on the page."""
+    if not subject:
+        return ""
+    for lot in ws.stock_lots():
+        if lot.id == str(subject):
+            return f"{lot.kind} {lot.cultivar}".strip()
+    for lot in ws.lots():
+        for product in ws.products():
+            if product.id == lot.product_id and lot.id == str(subject):
+                return f"{product.name} {product.cultivar}".strip()
+    return ""
+
+
+def _counting(number: int, singular: str, plural: str) -> str:
+    return f"{number} {singular if number == 1 else plural}"
 
 
 def prose(text) -> str:
@@ -308,6 +339,23 @@ CORRECT_FORMS = [
 ]
 
 
+SETUP_FORMS = [
+    {"action": "facility", "verb": "Record the facility", "title": "Record the facility",
+     "why": "The licence number appears on every notice and every manifest.",
+     "fields": [("name", "Legal name", "Nature's Grace FL, LLC"),
+                ("license", "Licence number", "MMTC-2026-0030"),
+                ("street", "Street", "1200 Grove Rd"), ("city", "City", "Brooksville"),
+                ("state", "State", "FL"), ("zip", "ZIP", "34601")]},
+    {"action": "room", "verb": "Add a room", "title": "Add a room",
+     "why": "Grow rooms and inventory rooms are the only two kinds; a cure room is an inventory room.",
+     "fields": [("kind", "Kind", "grow or inventory"), ("name", "Name", "G1"),
+                ("number", "Room number", "01"), ("quarantine", "Quarantine room", "no")]},
+    {"action": "import", "verb": "Import a spreadsheet", "title": "Import the incumbent export",
+     "why": "Paste the CSV. Dry run first: nothing is written until you run it for real.",
+     "fields": [("csv", "CSV", "")], "textarea": "csv"},
+]
+
+
 PLANT_FORMS = [
     {"action": "integration", "verb": "Record integration", "title": "Record the integration plan",
      "why": "Rule 64-4.221(4) requires full integration before cultivation is authorized.",
@@ -427,6 +475,14 @@ def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] =
                 f"name='{esc(spec['action'])}__{esc(name)}'>{options}</select>"
             )
             continue
+        if choice and choice[0] == "textarea":
+            fields.append(
+                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
+                f"<textarea id='{esc(spec['action'])}_{esc(name)}' "
+                f"name='{esc(spec['action'])}__{esc(name)}' rows='8' "
+                f"placeholder='paste the CSV, header row included'>{esc(values.get(f"{spec['action']}__{name}", ""))}</textarea>"
+            )
+            continue
         if choice and choice[0] == "cause":
             from .amendments import ALL_CAUSES, is_exempt
 
@@ -456,7 +512,10 @@ def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] =
         f"<input type='hidden' name='action' value='{esc(spec['action'])}'>"
         f"<p class='why'>{esc(spec['why'])}</p>"
         + "".join(fields) +
-        f"<button type='submit'>{esc(label)}</button></form></details>"
+        f"<button type='submit'>{esc(label)}</button>"
+        + (f"<button type='submit' name='{esc(spec['action'])}__go' value='1' class='quiet'>"
+           f"Import for real</button>" if spec.get("textarea") else "")
+        + "</form></details>"
     )
 
 
@@ -492,6 +551,9 @@ class App:
                 # the subject is usually already inside the summary; repeating it reads as debug output
                 where = (f'<span class="cite">{esc(f.subject)}</span>'
                          if f.subject and str(f.subject) not in f.summary else "")
+                about = _lot_about(ws, f.subject)
+                if about:
+                    where += f'<span class="cite">{esc(about)}</span>'
                 body.append(
                     f'<li class="row {esc(f.severity)}">'
                     f'<div class="headline"><span class="sev {esc(f.severity)}">{esc(f.severity)}</span>'
@@ -992,6 +1054,161 @@ class App:
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
 
+    # -- Setup and Audit -----------------------------------------------------
+
+    def render_setup(self, ws: Workspace, operator: str, *, values: dict | None = None,
+                     error: str = "", done: str = "", report=None, verify: bool = False) -> str:
+        from . import forms as dh
+        from .importer import map_headers
+
+        values = values or {}
+        facility = ws.facility()
+        body = ["<h1>Setup</h1>",
+                "<p class='lede'>The parts of the record that are set once and read everywhere.</p>"]
+        if done:
+            body.append(f"<div class='note'>{esc(done)}</div>")
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
+
+        if facility:
+            body.append("<h2>Facility</h2><table><tbody>")
+            for label, value in (("Legal name", facility.name), ("Licence", facility.license_number),
+                                 ("Address", ", ".join(filter(None, [facility.street, facility.city,
+                                                                     facility.state, facility.zip])))):
+                body.append(f"<tr><th>{esc(label)}</th><td>{esc(value)}</td></tr>")
+            body.append("</tbody></table>")
+        else:
+            body.append("<div class='refusal'>No facility is recorded yet. Record it before "
+                        "anything else.</div>")
+
+        rooms = ws.rooms()
+        if rooms:
+            body.append(f"<h2>Rooms ({len(rooms)})</h2><table><thead><tr><th>Name</th><th>Kind</th>"
+                        "<th>Number</th><th>Quarantine</th></tr></thead><tbody>")
+            for room in rooms:
+                body.append(f"<tr><td>{esc(room.name)}</td><td>{esc(room.kind)}</td>"
+                            f"<td>{esc(room.number)}</td>"
+                            f"<td>{'yes' if room.is_quarantine else ''}</td></tr>")
+            body.append("</tbody></table>")
+
+        integration = ws.integration()
+        body.append("<h2>Integration</h2>")
+        if integration:
+            body.append(f"<p class='context'>Approved {esc(str(integration['approved_on'])[:10])}, "
+                        f"plan {esc(integration['reference']) or 'no reference'}.</p>")
+        else:
+            body.append("<p class='context'>Not recorded. <a href='/plant'>Plant</a> records it.</p>")
+
+        products = ws.products()
+        body.append("<h2>Catalogue</h2>")
+        body.append(f"<p class='context'>{len(products)} product(s) in the DH5058 catalogue. "
+                    f"<a href='/setup/catalogue.csv'>Download the DH5058 CSV</a> "
+                    f"({len(dh.COLUMNS)} columns, {esc(dh.FORM_ID)}).</p>")
+
+        if verify:
+            ok, summary = ws.verify()
+            kind = "note" if ok else "refusal"
+            body.append(f"<div class='{kind}'><strong>{'Verified' if ok else 'BROKEN'}</strong>: "
+                        f"{esc(summary)}</div>")
+        else:
+            body.append("<p class='context'><a href='/setup?verify=1'>Run verify</a> to check the "
+                        "ledger hash chain.</p>")
+
+        if report is not None:
+            body.append("<h2>Import report</h2>")
+            body.append(f"<p class='{ 'note' if report.rows_failed == 0 else 'refusal' }'>"
+                        f"{esc(report.summary())}</p>")
+            if report.mapping:
+                body.append("<table><thead><tr><th>Column in your file</th><th>Read as</th>"
+                            "</tr></thead><tbody>")
+                for source, target in sorted(report.mapping.items()):
+                    body.append(f"<tr><td class='ident'>{esc(source)}</td><td>{esc(target)}</td></tr>")
+                body.append("</tbody></table>")
+            if report.errors:
+                body.append("<h3>Rows that did not import</h3><ul class='findings'>")
+                for line, message in report.errors[:40]:
+                    body.append(f"<li class='row breach'><div class='headline'>"
+                                f"<span class='sev breach'>row {line}</span>"
+                                f"<span>{esc(message)}</span></div></li>")
+                body.append("</ul>")
+
+        body.append("<h2>Record</h2>")
+        body.append("<p class='chips'>" + " ".join(
+            f"<a href='#{esc(spec['action'])}'>{esc(spec['verb'])}</a>" for spec in SETUP_FORMS
+        ) + "</p>")
+        suggested = {"import": {}}
+        body += [_form_html(spec, values, token=self.token, suggested=suggested.get(spec["action"], {}),
+                            open_it=(not facility and spec["action"] == "facility"))
+                 for spec in SETUP_FORMS]
+        body.append("<footer>coontie init · room · import · export dh5058 · verify</footer>")
+        return page(title="Setup", body="\n".join(body), here="/setup", operator=operator,
+                    facility=(facility.name if facility else ""), token=self.token)
+
+    def render_audit(self, ws: Workspace, operator: str) -> str:
+        from .inspect import CANNOT_CHECK, inspect as run_inspect, summarize as tally
+
+        now = datetime.now(timezone.utc)
+        findings = run_inspect(ws, now=now)
+        counts = tally(findings)
+        facility = ws.facility()
+        ok, summary = ws.verify()
+
+        entries = ws.ledger.entries()
+        head = entries[-1].hash if entries else ""
+        body = ["<div class='printonly'><h1>Compliance audit</h1>",
+                f"<p>{esc(facility.name if facility else 'No facility')} · licence "
+                f"{esc(facility.license_number if facility else '')} · "
+                f"{esc(now.strftime('%A %-d %B %Y, %H:%M UTC'))}</p>",
+                f"<p><strong>{_counting(counts[BREACH], 'breach', 'breaches')}, "
+                f"{_counting(counts[EXPOSURE], 'exposure', 'exposures')}, "
+                f"{_counting(counts[NOTE], 'note', 'notes')}</strong> · ledger "
+                f"{'verified' if ok else 'BROKEN'}</p>",
+                f"<p class='chain'>Ledger: {_counting(len(entries), 'record', 'records')}, "
+                f"hash chain head <code>{esc(head[:32])}</code>. The whole file is a single "
+                f"SQLite database; that head moves if any earlier record is altered.</p>",
+                "<p class='signoff'>Inspected by ______________________  "
+                "Signature ______________________  Date ____________</p></div>",
+                "<h1>Audit</h1>",
+                "<p class='lede'>What the department would find if it walked in now. "
+                "Print this page with Ctrl+P.</p>"]
+
+        if not ok:
+            body.append(f"<div class='refusal'><strong>Ledger broken.</strong> {esc(summary)}</div>")
+        else:
+            body.append(f"<p class='context'>Ledger chain verified: {esc(summary)}</p>")
+
+        body.append(f"<p class='context'>{prose(brief(ws, now=now, days=7))}</p>")
+
+        for severity, heading in ((BREACH, "Breaches"), (EXPOSURE, "Exposures"), (NOTE, "Notes")):
+            rows = [f for f in findings if f.severity == severity]
+            if not rows:
+                continue
+            body.append(f"<h2>{esc(heading)}</h2><ul class='findings'>")
+            for f in rows:
+                cite = f'<span class="cite">({esc(f.citation)})</span>' if f.citation else ""
+                where = (f'<span class="cite">{esc(f.subject)}</span>'
+                         if f.subject and str(f.subject) not in f.summary else "")
+                about = _lot_about(ws, f.subject)
+                if about:
+                    where += f'<span class="cite">{esc(about)}</span>'
+                body.append(f'<li class="row {esc(f.severity)}">'
+                            f'<div class="headline"><span class="sev {esc(f.severity)}">'
+                            f'{esc(f.severity)}</span><span>{esc(f.summary)}</span></div>'
+                            f'<div class="meta">{where} {cite}</div></li>')
+            body.append("</ul>")
+        if not findings:
+            body.append("<div class='note'>No findings.</div>")
+
+        body.append("<h2>What this cannot check</h2><ul>")
+        for item in CANNOT_CHECK:
+            body.append(f"<li><strong>{esc(item.area)}</strong>: {esc(item.why)}</li>")
+        body.append("</ul>")
+        body.append("<footer>coontie audit</footer>")
+        return page(title="Audit", body="\n".join(body), here="/audit", operator=operator,
+                    facility=(facility.name if facility else ""), token=self.token,
+                    badge=(counts[BREACH] + counts[EXPOSURE], "/audit"))
+
+
     def _vocabulary(self, ws: Workspace) -> dict:
         lots = [(lot.id, lot.cultivar) for lot in ws.stock_lots()]
         cultivars = tuple(sorted({c for _i, c in lots if c}))
@@ -1142,8 +1359,34 @@ class Handler(BaseHTTPRequestHandler):
                 ws.close()
             self._send(200, body, headers=self._session_cookie())
             return
+        if path == "/setup":
+            params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
+                                                 keep_blank_values=True))
+            ws = self._ws()
+            try:
+                body = self.app.render_setup(ws, operator, done=params.get("done", ""),
+                                             verify="verify" in params)
+            finally:
+                ws.close()
+            self._send(200, body, headers=self._session_cookie())
+            return
+        if path == "/setup/catalogue.csv":
+            from .forms import FORM_ID, render_csv
+
+            ws = self._ws()
+            try:
+                facility = ws.facility()
+                products = ws.products()
+                text = render_csv(products, facility.name if facility else "")
+            finally:
+                ws.close()
+            self._send(200, text, ctype="text/csv; charset=utf-8", headers={
+                "Content-Disposition": f'attachment; filename="dh5058-{FORM_ID}.csv"',
+                **self._session_cookie(),
+            })
+            return
         if path == "/audit":
-            self._with_ws(lambda ws: self._render_audit(ws, operator))
+            self._with_ws(lambda ws: self.app.render_audit(ws, operator))
             return
         if path in {p for p, _l, _k in RAIL}:
             self._with_ws(lambda ws: self._render_pending(path, ws, operator))
@@ -1154,6 +1397,21 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
+        try:
+            self._post()
+        except Exception as exc:  # noqa: BLE001 - the appliance answers, always
+            import traceback
+
+            traceback.print_exc()
+            self._send(500, page(
+                title="Something went wrong",
+                body=f"<h1>That did not work</h1><div class='refusal'>{esc(exc)}</div>"
+                     "<p class='context'>Nothing was written if the failure came before the write. "
+                     "The full traceback is in the server's console.</p>"
+                     "<p><a href='/'>Back to Today</a></p>",
+            ))
+
+    def _post(self) -> None:
         if not self._check_host() or not self._check_origin():
             self._send(403, "Request not allowed from here")
             return
@@ -1236,6 +1494,37 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if path == "/setup":
+            action = (form.get("action") or [""])[0]
+            values = {k: v[0] for k, v in form.items() if k != "token"}
+            ws = self._ws()
+            try:
+                outcome = apply_setup_form(ws, action, values, self._operator())
+            except ValueError as exc:
+                body = self.app.render_setup(ws, self._operator(), values=values, error=str(exc))
+                ws.close()
+                self._send(200, body, headers=self._session_cookie())
+                return
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            if isinstance(outcome, str):
+                self.send_response(303)
+                self.send_header("Location", f"/setup?done={urllib.parse.quote(outcome)}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            # an import keeps the report on the page, because a report is the point of an import
+            ws = self._ws()
+            try:
+                body = self.app.render_setup(ws, self._operator(), report=outcome)
+            finally:
+                ws.close()
+            self._send(200, body, headers=self._session_cookie())
+            return
+
         if path == "/say":
             sentence = (form.get("sentence") or [""])[0][:2000]
             self._with_ws(lambda ws: self.app.render_say(ws, self._operator(), sentence))
@@ -1252,36 +1541,6 @@ class Handler(BaseHTTPRequestHandler):
                 "arrives in a later build step. Until then the command line is the path.</div>"]
         return page(title=label, body="\n".join(body), here=path, operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.app.token)
-
-    def _render_audit(self, ws: Workspace, operator: str) -> str:
-        now = datetime.now(timezone.utc)
-        findings = inspect(ws, now=now)
-        body = ["<h1>Audit</h1>",
-                "<p class='lede'>What the department would find if it walked in now.</p>",
-                f"<p>{prose(brief(ws, now=now, days=7))}</p>"]
-        if findings:
-            body.append("<h2>Findings</h2><ul class='findings'>")
-            for f in findings:
-                cite = f'<span class="cite">({esc(f.citation)})</span> ' if f.citation else ""
-                body.append(
-                    f'<li class="row {esc(f.severity)}">'
-                    f'<div class="headline"><span class="sev {esc(f.severity)}">{esc(f.severity)}</span>'
-                    f"<span>{esc(f.summary)}</span></div>"
-                    f'<div class="meta">{cite}</div></li>'
-                )
-            body.append("</ul>")
-        else:
-            body.append("<div class='note'>No findings.</div>")
-        body.append("<h2>What this cannot check</h2><ul>")
-        from .inspect import CANNOT_CHECK
-
-        for item in CANNOT_CHECK:
-            body.append(f"<li><strong>{esc(item.area)}</strong> — {esc(item.why)}</li>")
-        body.append("</ul>")
-        body.append("<footer>coontie audit</footer>")
-        return page(title="Audit", body="\n".join(body), here="/audit", operator=operator,
-                    facility=(ws.facility().name if ws.facility() else ""), token=self.app.token,
-                    badge=(summarize(findings)[BREACH] + summarize(findings)[EXPOSURE], "/audit"))
 
 
 def apply_form(ws: Workspace, action: str, values: dict, operator: str) -> str:
@@ -1439,6 +1698,57 @@ def apply_correct_form(ws: Workspace, action: str, values: dict, operator: str) 
         ws.mark_justification_sent(g("notice"))
         return f"Notice {g('notice')} marked sent."
     raise ValueError(f"no correction form called {action!r}")
+
+
+
+
+def apply_setup_form(ws: Workspace, action: str, values: dict, operator: str):
+    """Setup writes the things everything else reads. Returns a summary, or a report for an import."""
+    from .importer import import_csv
+
+    def g(name: str) -> str:
+        return (values.get(f"{action}__{name}") or "").strip()
+
+    if action == "facility":
+        from .workspace import Facility
+
+        if ws.facility():
+            raise ValueError("a facility is already recorded; the record holds one per workspace")
+        facility = ws.add_facility(Facility(
+            id="f1", name=g("name"), license_number=g("license"), street=g("street"),
+            city=g("city"), state=g("state") or "FL", zip=g("zip"),
+        ))
+        return f"Facility {facility.name} recorded."
+    if action == "room":
+        from .workspace import Room
+
+        kind = g("kind").lower().replace(" ", "_")
+        if kind not in {"grow", "inventory"}:
+            raise ValueError("a room is a grow room or an inventory room; a cure room is inventory")
+        facility = ws.facility()
+        if not facility:
+            raise ValueError("record the facility before its rooms")
+        count = len(ws.rooms()) + 1
+        room = ws.add_room(Room(
+            id=f"room-{count}", facility_id=facility.id, kind=kind, name=g("name"),
+            number=g("number") or f"{count:02d}",
+            is_quarantine=g("quarantine").lower() in {"yes", "y", "true", "1"},
+        ))
+        return f"Room {room.name} added as a {room.kind} room."
+    if action == "import":
+        facility = ws.facility()
+        if not facility:
+            raise ValueError("record the facility before importing into it")
+        text = values.get("import__csv") or ""
+        if not text.strip():
+            raise ValueError("paste the CSV first")
+        dry_run = values.get("import__go") != "1"
+        folder = Path(ws.path).parent / "imports"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"pasted-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.csv"
+        path.write_text(text, encoding="utf-8")
+        return import_csv(ws, path, facility_id=facility.id, dry_run=dry_run)
+    raise ValueError(f"no setup form called {action!r}")
 
 
 
