@@ -188,6 +188,30 @@ class TestG5(unittest.TestCase):
             self.assertIn(column, header)
         self.assertEqual(len(body.strip().splitlines()), 3)   # header plus two products
 
+    def test_5b_an_employee_and_an_api_user_are_recorded_without_storing_the_password(self):
+        self.app.form("/setup", "facility", name="Nature's Grace FL, LLC", license="MMTC-2026-0030")
+        status, html = self.app.form("/setup", "employee", name="Maria Lopez", dob="1990-04-02",
+                                     hired="2026-01-05", email="maria@example.com")
+        self.assertEqual(status, 200)
+        self.assertIn("Maria Lopez", html)
+        self.assertIn("Employees (1)", text_of(html))
+        self.assertNotIn("1990-04-02", text_of(html))     # the birth date is not displayed back
+
+        # a second record for the same person is refused in the rule's words
+        status, html = self.app.form("/setup", "employee", name="Maria Lopez", dob="1990-04-02",
+                                     hired="2026-01-05", email="maria@example.com")
+        self.assertIn("already an employee", text_of(html))
+
+        secret = "correct horse battery staple"
+        status, html = self.app.form("/setup", "api_user", email="robot@example.com",
+                                     password=secret, permissions="inventory.read")
+        self.assertEqual(status, 200)
+        self.assertIn("verifier", text_of(html))
+        self.assertIn("robot@example.com", html)
+        raw = self.db.read_bytes()
+        self.assertNotIn(secret.encode(), raw)
+        self.assertNotIn(secret, html)
+
     def test_6_verify_reports_the_chain_and_a_broken_chain_is_not_hidden(self):
         self.app.form("/setup", "facility", name="Nature's Grace FL, LLC", license="MMTC-2026-0030")
         status, html = self.app.get("/setup?verify=1")
@@ -224,7 +248,7 @@ class TestG5(unittest.TestCase):
         self.assertIn("MMUR", text)
         self.assertIn("64-4.222(11)", text)     # a lot with no origin is a finding on a bare facility
 
-    def test_8_audit_prints_a_heading_a_licence_and_the_counts(self):
+    def test_8_audit_prints_a_heading_a_license_and_the_counts(self):
         self.app.form("/setup", "facility", name="Nature's Grace FL, LLC", license="MMTC-2026-0030",
                       street="1200 Grove Rd", city="Brooksville", state="FL", zip="34601")
         _status, html = self.app.get("/audit")

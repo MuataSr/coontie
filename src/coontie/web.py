@@ -347,7 +347,7 @@ CORRECT_FORMS = [
 
 SETUP_FORMS = [
     {"action": "facility", "verb": "Record the facility", "title": "Record the facility",
-     "why": "The licence number appears on every notice and every manifest.",
+     "why": "The license number appears on every notice and every manifest.",
      "fields": [("name", "Legal name", "Nature's Grace FL, LLC"),
                 ("license", "Licence number", "MMTC-2026-0030"),
                 ("street", "Street", "1200 Grove Rd"), ("city", "City", "Brooksville"),
@@ -356,9 +356,35 @@ SETUP_FORMS = [
      "why": "Grow rooms and inventory rooms are the only two kinds; a cure room is an inventory room.",
      "fields": [("kind", "Kind", "grow or inventory"), ("name", "Name", "G1"),
                 ("number", "Room number", "01"), ("quarantine", "Quarantine room", "no")]},
+    {"action": "employee", "verb": "Record an employee", "title": "Record an employee",
+     "why": "The catalogue asks for full name, date of birth, hire date and email. The date of "
+            "birth is recorded once and not shown again.",
+     "fields": [("name", "Full name", "Maria Lopez"), ("dob", "Date of birth", "1990-04-02"),
+                ("hired", "Hire date", "2026-01-05"), ("email", "Email", "maria@example.com")]},
+    {"action": "api_user", "verb": "Record an API user", "title": "Record an API user",
+     "why": "The password is used to derive a verifier and then forgotten: the ledger can never "
+            "forget what it is given.",
+     "fields": [("email", "Email", "robot@example.com"),
+                ("password", "Password", "at least eight characters", "password"),
+                ("permissions", "Permissions", "inventory.read, transport.write")]},
     {"action": "import", "verb": "Import a spreadsheet", "title": "Import the incumbent export",
      "why": "Paste the CSV. Dry run first: nothing is written until you run it for real.",
      "fields": [("csv", "CSV", "")], "textarea": "csv"},
+]
+
+
+INVENTORY_FORMS = [
+    {"action": "move", "verb": "Move a lot", "title": "Move a lot between rooms",
+     "why": "A held lot does not move; the hold is an instruction about the material, not the paperwork.",
+     "fields": [("lot", "Lot", "lot-..."), ("room", "To room", "INV2", "room"),
+                ("note", "Note", "optional")]},
+    {"action": "schedule_disposal", "verb": "Schedule destruction", "title": "Schedule a lot's destruction",
+     "why": "DH5059 asks for the schedule first, and 72 hours must pass before the lot can be destroyed.",
+     "fields": [("lot", "Lot", "lot-..."), ("reason", "Reason", "failed potency test")]},
+    {"action": "destroy", "verb": "Destroy the lot", "title": "Destroy a scheduled lot",
+     "why": "The row stays and its quantity goes to zero, so the loss is a number rather than a "
+            "disappearance.",
+     "fields": [("lot", "Lot", "lot-...")]},
 ]
 
 
@@ -470,6 +496,15 @@ def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] =
     for name, label, placeholder, *choice in spec["fields"]:
         value = esc(values.get(f"{spec['action']}__{name}", "") or suggested.get(name, ""))
         focus = " autofocus" if name == spec["fields"][0][0] and not values else ""
+        if choice and choice[0] == "password":
+            fields.append(
+                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
+                f"<input id='{esc(spec['action'])}_{esc(name)}' "
+                f"name='{esc(spec['action'])}__{esc(name)}' type='password' value='' "
+                f"placeholder='{esc(placeholder)}' autocomplete='new-password' "
+                f"style='width:100%'>"
+            )
+            continue
         if choice and choice[0] == "room" and rooms:
             options = "".join(
                 f"<option value='{esc(room)}'{' selected' if room == value else ''}>{esc(room)}</option>"
@@ -657,7 +692,8 @@ class App:
         return page(title="Say it", body="\n".join(body), here="/say", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
-    def render_inventory(self, ws: Workspace, operator: str, params: dict) -> str:
+    def render_inventory(self, ws: Workspace, operator: str, params: dict, *,
+                         values: dict | None = None, error: str = "") -> str:
         from .insight import lineage
 
         room_filter = (params.get("room") or "").strip()
@@ -681,14 +717,28 @@ class App:
             product_rows = [r for r in product_rows if r["room_id"] == room_filter or
                             rooms.get(r["room_id"], "") == room_filter]
 
+        values = values or {}
         body = ["<h1>Inventory</h1>",
                 "<p class='lede'>What the facility holds, and where each lot came from.</p>"]
+        if params.get("done"):
+            body.append(f"<div class='note'>{esc(params['done'])}</div>")
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
 
         if selected:
-            lines = lineage(ws, selected)
-            body.append(f"<h2>Lineage for <code>{esc(selected)}</code> "
+            # a product lot carries no processing lineage; an unknown reference is still a 404
+            is_product_lot = any(
+                lot.id == selected or lot.id.startswith(selected) for lot in ws.lots()
+            )
+            lines = None if is_product_lot else lineage(ws, selected)
+            if lines is None:
+                body.append(f"<p class='context'><code>{esc(selected)}</code> is product inventory; "
+                            f"its history is the journal, not a processing tree.</p>")
+            else:
+                body.append(f"<h2>Lineage for <code>{esc(selected)}</code> "
                         f"<a class='cite' href='/inventory' style='font-weight:400'>clear</a></h2>")
-            body.append("<pre class='lineage'>" + esc("\n".join(line.render() for line in lines)) + "</pre>")
+                body.append("<pre class='lineage'>" +
+                            esc("\n".join(line.render() for line in lines)) + "</pre>")
 
         body += [
                 "<form method='get' action='/inventory' class='filters'>",
@@ -758,7 +808,20 @@ class App:
                 )
             body.append("</tbody></table>")
 
-        body.append("<footer>coontie lineage &lt;lot&gt;</footer>")
+        body.append("<h2>Record</h2>")
+        body.append("<p class='chips'>" + " ".join(
+            f"<a href='#{esc(spec['action'])}'>{esc(spec['verb'])}</a>" for spec in INVENTORY_FORMS
+        ) + "</p>")
+        names = tuple(room.name for room in ws.rooms())
+        suggested = {"move": {}, "schedule_disposal": {}, "destroy": {}}
+        if selected:
+            for action in suggested:
+                suggested[action] = {"lot": selected}
+        body += [_form_html(spec, values, token=self.token, rooms=names,
+                            open_it=spec["action"] == "move",
+                            suggested=suggested.get(spec["action"], {}))
+                 for spec in INVENTORY_FORMS]
+        body.append("<footer>coontie move --lot · dispose --lot</footer>")
         return page(title="Inventory", body="\n".join(body), here="/inventory", operator=operator,
                     facility=(ws.facility().name if ws.facility() else ""), token=self.token)
 
@@ -1078,7 +1141,7 @@ class App:
 
         if facility:
             body.append("<h2>Facility</h2><table><tbody>")
-            for label, value in (("Legal name", facility.name), ("Licence", facility.license_number),
+            for label, value in (("Legal name", facility.name), ("License", facility.license_number),
                                  ("Address", ", ".join(filter(None, [facility.street, facility.city,
                                                                      facility.state, facility.zip])))):
                 body.append(f"<tr><th>{esc(label)}</th><td>{esc(value)}</td></tr>")
@@ -1087,6 +1150,33 @@ class App:
             body.append("<div class='refusal'>No facility is recorded yet. Record it before "
                         "anything else.</div>")
 
+        employees = ws.employees()
+        body.append(f"<h2>Employees ({len(employees)})</h2>")
+        if employees:
+            body.append("<table><thead><tr><th>Name</th><th>Email</th><th>Hired</th>"
+                        "</tr></thead><tbody>")
+            for person in employees:
+                body.append(f"<tr><td>{esc(person.full_name)}</td>"
+                            f"<td class='ident'>{esc(person.email)}</td>"
+                            f"<td>{esc(person.hire_date.isoformat())}</td></tr>")
+            body.append("</tbody></table>")
+        else:
+            body.append("<p class='muted'>No employees recorded. A manifest names two, so a "
+                        "transport cannot leave without them.</p>")
+
+        api_users = ws.api_users()
+        body.append(f"<h2>API users ({len(api_users)})</h2>")
+        if api_users:
+            body.append("<table><thead><tr><th>Email</th><th>Permissions</th><th>Credential</th>"
+                        "</tr></thead><tbody>")
+            for user in api_users:
+                body.append(f"<tr><td class='ident'>{esc(user.email)}</td>"
+                            f"<td>{esc(', '.join(user.permissions))}</td>"
+                            f"<td class='cite'>verifier only, plaintext never stored</td></tr>")
+            body.append("</tbody></table>")
+        else:
+            body.append("<p class='muted'>No API users recorded.</p>")
+
         rooms = ws.rooms()
         if rooms:
             body.append(f"<h2>Rooms ({len(rooms)})</h2><table><thead><tr><th>Name</th><th>Kind</th>"
@@ -1094,7 +1184,7 @@ class App:
             for room in rooms:
                 body.append(f"<tr><td>{esc(room.name)}</td><td>{esc(room.kind)}</td>"
                             f"<td>{esc(room.number)}</td>"
-                            f"<td>{'yes' if room.is_quarantine else ''}</td></tr>")
+                            f"<td>{'yes' if room.is_quarantine else 'no'}</td></tr>")
             body.append("</tbody></table>")
 
         integration = ws.integration()
@@ -1162,7 +1252,7 @@ class App:
         entries = ws.ledger.entries()
         head = entries[-1].hash if entries else ""
         body = ["<div class='printonly'><h1>Compliance audit</h1>",
-                f"<p>{esc(facility.name if facility else 'No facility')} · licence "
+                f"<p>{esc(facility.name if facility else 'No facility')} · license "
                 f"{esc(facility.license_number if facility else '')} · "
                 f"{esc(now.strftime('%A %-d %B %Y, %H:%M UTC'))}</p>",
                 f"<p><strong>{_counting(counts[BREACH], 'breach', 'breaches')}, "
@@ -1680,6 +1770,29 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if path == "/inventory":
+            action = (form.get("action") or [""])[0]
+            values = {k: v[0] for k, v in form.items() if k != "token"}
+            ws = self._ws()
+            try:
+                summary = apply_inventory_form(ws, action, values, self._operator())
+            except ValueError as exc:
+                body = self.app.render_inventory(ws, self._operator(), {},
+                                                 values=values, error=str(exc))
+                ws.close()
+                self._send(200, body, headers=self._session_cookie())
+                return
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            self.send_response(303)
+            self.send_header("Location", f"/inventory?done={urllib.parse.quote(summary)}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
         if path == "/setup":
             action = (form.get("action") or [""])[0]
             values = {k: v[0] for k, v in form.items() if k != "token"}
@@ -1921,6 +2034,18 @@ def apply_setup_form(ws: Workspace, action: str, values: dict, operator: str):
             is_quarantine=g("quarantine").lower() in {"yes", "y", "true", "1"},
         ))
         return f"Room {room.name} added as a {room.kind} room."
+    if action == "employee":
+        employee = ws.add_employee(
+            full_name=g("name"), date_of_birth=g("dob"), hire_date=g("hired"), email=g("email"),
+        )
+        return f"Employee {employee.full_name} recorded; the date of birth is on the record only."
+    if action == "api_user":
+        user = ws.add_api_user(
+            email=g("email"), password=values.get("api_user__password") or "",
+            permissions=g("permissions"),
+        )
+        return (f"API user {user.email} recorded with a verifier; the password itself is not "
+                f"stored.")
     if action == "import":
         facility = ws.facility()
         if not facility:
@@ -1964,6 +2089,24 @@ def apply_drift_form(ws: Workspace, action: str, values: dict, operator: str) ->
                                      actor=operator)
         return f"{finding['record_key']} settled: {act.replace('_', ' ')}."
     raise ValueError(f"no drift action called {action!r}")
+
+
+
+def apply_inventory_form(ws: Workspace, action: str, values: dict, operator: str) -> str:
+    def g(name: str) -> str:
+        return (values.get(f"{action}__{name}") or "").strip()
+
+    if action == "move":
+        lot = ws.move_inventory(g("lot"), g("room"), note=g("note"))
+        return f"Lot {lot.id} moved to {g('room')}; {lot.quantity} {lot.unit} on the record."
+    if action == "schedule_disposal":
+        disposal = ws.schedule_disposal_lot(g("lot"), reason=g("reason"))
+        return (f"Lot {g('lot')} scheduled for destruction ({disposal.weight} {disposal.unit}); "
+                f"72 hours must pass before it can be destroyed.")
+    if action == "destroy":
+        disposal = ws.dispose_lot(g("lot"))
+        return f"Lot {g('lot')} destroyed; {disposal.weight} {disposal.unit} off the record."
+    raise ValueError(f"no inventory form called {action!r}")
 
 
 

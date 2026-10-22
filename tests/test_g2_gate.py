@@ -15,8 +15,10 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,13 +50,14 @@ def seed(db: Path) -> dict:
         id="p1", facility_id="f1", name="Blue Dream 3.5g", product_type="Whole Flower", route="Smoking",
         upid="blue-dream-3.5-smoking-DE1114", weight_g=None, cultivar="Blue Dream",
     ))
-    ws.conn.execute(
+    ws.conn.executemany(
         "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,created_at) VALUES (?,?,?,?,?,?,?)",
-        ("lot-held", product.id, "inv1", "35", "g", 1, T0.isoformat()),
+        [("lot-held", product.id, "inv1", "35", "g", 1, T0.isoformat()),
+         ("lot-free", product.id, "inv1", "20", "g", 0, T0.isoformat())],
     )
     ws.conn.commit()
     ws.close()
-    return {"lot": lot.id, "child": child.id, "held": "lot-held"}
+    return {"lot": lot.id, "child": child.id, "held": "lot-held", "free": "lot-free"}
 
 
 class Appliance:
@@ -65,8 +68,9 @@ class Appliance:
             [sys.executable, "-m", "coontie.cli", "--db", str(db), "serve", "--port", str(self.port)],
             env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        self.jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            urllib.request.HTTPCookieProcessor(self.jar))
         deadline = time.time() + 25
         while time.time() < deadline:
             try:
@@ -80,6 +84,26 @@ class Appliance:
     def get(self, path: str) -> tuple[int, str]:
         try:
             with self.opener.open(f"{self.base}{path}", timeout=10) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+
+    def token(self) -> str:
+        for cookie in self.jar:
+            if cookie.name == "coontie_session":
+                return cookie.value
+        return ""
+
+    def form(self, path: str, action: str, **fields) -> tuple[int, str]:
+        if not self.token():           # the cookie is minted by any page load
+            self.get("/")
+        payload = {"token": self.token(), "action": action}
+        payload.update({f"{action}__{k}": v for k, v in fields.items()})
+        try:
+            with self.opener.open(
+                    urllib.request.Request(f"{self.base}{path}",
+                                           data=urllib.parse.urlencode(payload).encode()),
+                    timeout=20) as r:
                 return r.status, r.read().decode()
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode()
@@ -170,6 +194,38 @@ class TestG2(unittest.TestCase):
         status, body = self.app.get("/inventory?lot=stk-nope")
         self.assertEqual(status, 404)
         self.assertIn("no final product or processing lot", body)
+
+    def test_a_lot_is_moved_from_the_inventory_screen(self):
+        status, html = self.app.form("/inventory", "move", lot=self.ids["free"], room="INV2")
+        self.assertEqual(status, 200)
+        self.assertIn("moved to INV2", text_of(html))
+        ws = Workspace(self.db)
+        try:
+            self.assertEqual(ws.lot(self.ids["free"]).room_id, "inv2")
+        finally:
+            ws.close()
+
+    def test_a_held_lot_is_refused_a_move_on_the_screen(self):
+        status, html = self.app.form("/inventory", "move", lot=self.ids["held"], room="INV2")
+        self.assertEqual(status, 200)
+        self.assertIn("on hold", text_of(html))
+
+    def test_destruction_needs_the_schedule_and_the_wait(self):
+        status, html = self.app.form("/inventory", "destroy", lot=self.ids["free"])
+        self.assertEqual(status, 200)
+        self.assertIn("schedule first", text_of(html))
+
+        status, html = self.app.form("/inventory", "schedule_disposal", lot=self.ids["free"],
+                                     reason="failed potency test")
+        self.assertIn("scheduled for destruction", text_of(html))
+        status, html = self.app.form("/inventory", "destroy", lot=self.ids["free"])
+        self.assertEqual(status, 200)
+        self.assertIn("72", text_of(html))          # the wait is what refuses it
+        ws = Workspace(self.db)
+        try:
+            self.assertGreater(Decimal(ws.lot(self.ids["free"]).quantity), Decimal("0"))
+        finally:
+            ws.close()
 
     def test_a_lot_id_prefix_resolves(self):
         status, html = self.app.get(f"/inventory?lot={self.ids['child'][:10]}")

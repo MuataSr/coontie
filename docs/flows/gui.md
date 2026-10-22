@@ -125,10 +125,18 @@ written, which is the same rule as the model-assist decision: propose, then conf
 | 2 | Table | Lot, kind, cultivar, original, remaining, room, source |
 | 3 | Row link | Opens **Lineage** for that lot in place, indented, as `insight.lineage` prints it |
 | 4 | Row action: Correct | Links to Screen 7 with the lot pre-selected |
+| 5 | Record | Three forms: **Move a lot** (lot, to room, note), **Schedule destruction** (lot, reason), **Destroy the lot** (lot) |
 
 Held lots render with a hold band and the reason, not a colour alone.
 
-**Reads:** `Workspace.stock_lots`, `stock_remaining`, `insight.lineage`. Writes nothing.
+A held lot cannot be moved from here: the hold is an instruction about the material, and the screen
+refuses rather than letting one gesture satisfy a form and break a hold. Destruction is two steps
+because the rule has two: the schedule starts the clock, and the destroy form is refused inside the
+72-hour wait with the hours remaining. A product lot has no processing lineage, so selecting one
+says so instead of drawing an empty tree.
+
+**Reads:** `Workspace.stock_lots`, `stock_remaining`, `insight.lineage`, `lots`.
+**Records:** `inventory_move`, `disposal_schedule_inventory`, `disposal_inventory`.
 
 ## Screen 4: Plant
 
@@ -216,8 +224,14 @@ The "cannot check" list prints too. It is part of the report, not a footnote.
 
 ## Screen 10: Setup
 
-Facility details, rooms, the integration plan (approved on, reference number, attachment note),
-the incumbent import with a dry-run first, the DH5058 catalogue export, and `verify`.
+Facility details, rooms, **employees**, **API users**, the integration plan (approved on, reference
+number, attachment note), the incumbent import with a dry-run first, the DH5058 catalogue export,
+and `verify`.
+
+An employee's date of birth is collected once, because the catalogue asks for it, and is not shown
+again on any screen. An API user's password is typed once and turned into a PBKDF2 verifier; the
+ledger holds the verifier and the screen says so in those words, because a hash-chained append-only
+file can never forget a secret it is given.
 
 The import form runs `--dry-run` by default and shows the per-row error report before any row is
 written. That is the first-run experience, so it gets the most care in the whole interface: a new

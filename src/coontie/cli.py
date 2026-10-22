@@ -410,6 +410,37 @@ def cmd_dispense(args) -> int:
     return 0
 
 
+def cmd_employee(args) -> int:
+    ws = _ws(args)
+    try:
+        employee = ws.add_employee(
+            full_name=args.name, date_of_birth=args.dob, hire_date=args.hire_date,
+            email=args.email, at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{employee.id}  {employee.full_name}  hired {employee.hire_date.isoformat()}  "
+          f"{employee.email}")
+    print("date of birth is on the record and deliberately not printed again")
+    ws.close()
+    return 0
+
+
+def cmd_api_user(args) -> int:
+    ws = _ws(args)
+    try:
+        user = ws.add_api_user(
+            email=args.email, password=args.password, permissions=args.permissions,
+            at=_now_arg(args.at),
+        )
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print(f"{user.id}  {user.email}  permissions: {', '.join(user.permissions)}")
+    print("a verifier was recorded; the password itself is not on the record and cannot be read back")
+    ws.close()
+    return 0
+
+
 def cmd_link(args) -> int:
     ws = _ws(args)
     try:
@@ -543,7 +574,14 @@ def cmd_move(args) -> int:
     from .cultivation import parse_plants
 
     ws = _ws(args)
+    if bool(args.plants) == bool(args.lot):
+        sys.exit("give --plants or --lot, not both and not neither")
     try:
+        if args.lot:
+            lot = ws.move_inventory(args.lot, args.to, note=args.note or "", at=_now_arg(args.at))
+            print(f"{lot.id}  moved to {args.to}; {lot.quantity} {lot.unit} on the record")
+            ws.close()
+            return 0
         moved = ws.move_plants(parse_plants(args.plants), args.to, at=_now_arg(args.at))
     except ValueError as exc:
         sys.exit(str(exc))
@@ -626,6 +664,18 @@ def cmd_dispose(args) -> int:
 
     ws = _ws(args)
     try:
+        if args.lot:
+            if args.schedule:
+                if not args.reason:
+                    sys.exit("a disposal schedule needs --reason")
+                disposal = ws.schedule_disposal_lot(args.lot, reason=args.reason, at=_now_arg(args.at))
+                print(f"{disposal.id}  lot {args.lot} scheduled for destruction "
+                      f"({disposal.weight} {disposal.unit}); 72 hours must pass before destroying it")
+            else:
+                disposal = ws.dispose_lot(args.lot, at=_now_arg(args.at))
+                print(f"{disposal.id}  lot {args.lot} destroyed; {disposal.weight} {disposal.unit} off the record")
+            ws.close()
+            return 0
         if args.matter:
             disposal = ws.dispose_matter(weight=args.matter, unit=args.unit, at=_now_arg(args.at))
             print(f"{disposal.id}  plant matter disposed: {disposal.weight} {disposal.unit}")
@@ -1175,9 +1225,11 @@ def build_parser() -> argparse.ArgumentParser:
     pln.add_argument("--at")
     pln.set_defaults(func=cmd_plant)
 
-    mv = _db(sub.add_parser("move", help="move plants to another room"))
-    mv.add_argument("--plants", required=True, help="PL-0001,PL-0002 or a range PL-0001..PL-0012")
+    mv = _db(sub.add_parser("move", help="move plants or a product lot to another room"))
+    mv.add_argument("--plants", help="PL-0001,PL-0002 or a range PL-0001..PL-0012")
+    mv.add_argument("--lot", help="a product lot id; moves inventory rather than plants")
     mv.add_argument("--to", required=True)
+    mv.add_argument("--note")
     mv.add_argument("--at")
     mv.set_defaults(func=cmd_move)
 
@@ -1205,6 +1257,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     dsp2 = _db(sub.add_parser("dispose", help="dispose of plants or plant matter"))
     dsp2.add_argument("--plants")
+    dsp2.add_argument("--lot", help="a product lot id: schedule its destruction, then destroy it")
     dsp2.add_argument("--matter", help="weight of post-defoliation matter")
     dsp2.add_argument("--reason")
     dsp2.add_argument("--unit", default="g")
@@ -1413,6 +1466,23 @@ def build_parser() -> argparse.ArgumentParser:
     dsp.add_argument("--mmur-verified", action="store_true", help="registry checked before dispensing")
     dsp.add_argument("--at", help="ISO timestamp, for simulation")
     dsp.set_defaults(func=cmd_dispense)
+
+    emp = _db(sub.add_parser("employee", help="record an MMTC employee"))
+    emp.add_argument("--name", required=True, help="full name, as the payroll file has it")
+    emp.add_argument("--dob", required=True, help="date of birth, YYYY-MM-DD")
+    emp.add_argument("--hire-date", required=True, dest="hire_date", help="YYYY-MM-DD")
+    emp.add_argument("--email", required=True)
+    emp.add_argument("--at")
+    emp.set_defaults(func=cmd_employee)
+
+    apiu = _db(sub.add_parser("api-user", help="record an authorized API user"))
+    apiu.add_argument("--email", required=True)
+    apiu.add_argument("--permissions", required=True,
+                      help="comma separated, for example inventory.read,transport.write")
+    apiu.add_argument("--password", required=True,
+                      help="used to derive a verifier; the plaintext is never stored")
+    apiu.add_argument("--at")
+    apiu.set_defaults(func=cmd_api_user)
 
     lnk = _db(sub.add_parser("link", help="attach the department inventory id to a lot"))
     lnk.add_argument("--lot", required=True)

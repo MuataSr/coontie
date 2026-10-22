@@ -25,9 +25,13 @@ Butterfly and Its Coontie Connection" (see `docs/sources.md`).
 Free and open source, no per-seat licence, no vendor lock-in. The point is that an
 operator can read the code that reports their grams to the state.
 
-**Status: skeleton. Version 0.0.1. Not deployable, not certified, no department
-API adapter yet.** What exists today is the part that is public and verifiable:
-the department's own data contract, turned into executable rules.
+**Status: the record layer is complete through a facility's ordinary day; the appliance
+interface is complete. Version 0.0.1. Not deployed, not certified, and with no department
+API adapter: BioTrack issues credentials only to a vendor naming a sponsoring MMTC, so
+transmission is the one thing this record cannot yet do.** 371 standard-library tests, no
+third-party runtime dependency. Of the 33 event types on Form DH5059-OMMU-05/2026, 31 have a
+writer; the two absent are the dispensing-side `refund` and `void_sale`, which wait on MMUR
+access rather than on effort.
 
 ## What is in here
 
@@ -45,6 +49,7 @@ the department's own data contract, turned into executable rules.
 | `src/coontie/outage.py` | The disconnection clock, the notice and restoration drafts, and the outage CSV |
 | `src/coontie/driftfeed.py` | Reads the department's export through aliases; normalises statuses, units and quantities |
 | `src/coontie/web.py` | The appliance interface: ten screens, one session token, loopback only, standard library |
+| `src/coontie/people.py` | Employees and API users, and the password-to-verifier derivation that keeps secrets out of the ledger |
 | `src/coontie/cultivation.py` | Batches, plants, the schedule-before-harvest rule, the 72-hour disposal wait, harvest arithmetic |
 | `src/coontie/processing.py` | Cure, lot conservation, conversions, ingredients, samples, final products, the immutable expiration |
 | `src/coontie/transport.py` | Vehicles, the manifest and its statutory page, dispatch and receipt arithmetic |
@@ -246,6 +251,28 @@ Two rules are absolute here:
 
 A final product must carry a unique product ID that already exists in the DH5058 catalogue,
 so the catalogue S1 builds is what production actually uses.
+
+## People, moves and destruction
+
+The catalogue's admin and disposal events, and the two that move material around a facility:
+
+```bash
+coontie employee --name "Maria Lopez" --dob 1990-04-02 --hire-date 2026-01-05 --email maria@example.com
+coontie api-user --email robot@example.com --permissions inventory.read,transport.write --password '...'
+coontie move --lot lot-2417458961 --to INV2
+coontie dispose --lot lot-2417458961 --schedule --reason "failed potency test"
+coontie dispose --lot lot-2417458961          # refused inside the 72-hour wait
+```
+
+An API user's password **never reaches the ledger**. The form derives PBKDF2-HMAC-SHA256 and the
+event carries `password_verifier`; the plaintext exists for the length of the request and is gone.
+A hash-chained, append-only file is printed, backed up and exported, and a secret written into it
+can never be taken out again. That is a deliberate deviation from the catalogue's field list, it is
+named in `docs/flows/facility-records.md`, and a test asserts the plaintext is absent from the
+database file, not merely from the page.
+
+A held lot does not move: the hold is an instruction about the material, and the record should not
+let an operator satisfy a form and break a hold in the same gesture.
 
 ## Transport, and the manifest a driver carries
 

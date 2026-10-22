@@ -249,6 +249,23 @@ CREATE TABLE IF NOT EXISTS disposals (
     unit         TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS employees (
+    id            TEXT PRIMARY KEY,
+    full_name     TEXT NOT NULL,
+    date_of_birth TEXT NOT NULL,
+    hire_date     TEXT NOT NULL,
+    email         TEXT NOT NULL UNIQUE,
+    active        INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_users (
+    id          TEXT PRIMARY KEY,
+    email       TEXT NOT NULL UNIQUE,
+    permissions TEXT NOT NULL,
+    verifier    TEXT NOT NULL,
+    kdf         TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS cures (
     id            TEXT PRIMARY KEY,
     harvest_id    TEXT NOT NULL,
@@ -716,6 +733,227 @@ class Workspace:
             raise ValueError(f"no justification {justification_id!r}")
         self.conn.commit()
         return self._justification_row(justification_id)
+
+    # -- people (DH5059 admin events) ----------------------------------------
+
+    def add_employee(
+        self,
+        *,
+        full_name: str,
+        date_of_birth,
+        hire_date,
+        email: str,
+        at: datetime | None = None,
+    ) -> "Employee":
+        from . import people
+        from .outage import new_id
+
+        name = people.check_name(full_name)
+        born = people.check_date(date_of_birth, field="date of birth")
+        hired = people.check_hire_date(hire_date)
+        mail = people.check_email(email, who="an employee's email")
+        if born >= hired:
+            raise ValueError(
+                f"{name}: date of birth {born.isoformat()} is not before the hire date "
+                f"{hired.isoformat()}"
+            )
+        if self.conn.execute("SELECT 1 FROM employees WHERE email = ?", (mail,)).fetchone():
+            raise ValueError(f"{mail} is already an employee on this record; a second record for "
+                             "one person is how a manifest names a stranger")
+        at = at or datetime.now(timezone.utc)
+        employee = people.Employee(
+            id=new_id("emp"), full_name=name, date_of_birth=born, hire_date=hired, email=mail,
+        )
+        self.conn.execute(
+            "INSERT INTO employees (id,full_name,date_of_birth,hire_date,email,active,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (employee.id, name, born.isoformat(), hired.isoformat(), mail, 1, _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "employee_record",
+            {
+                "full_name": name, "dob": born.isoformat(), "hire_date": hired.isoformat(),
+                "email": mail, "employee_id": employee.id,
+            },
+            at,
+        )
+        return employee
+
+    def employees(self) -> list:
+        from . import people
+
+        return [
+            people.Employee(
+                id=r["id"], full_name=r["full_name"],
+                date_of_birth=date.fromisoformat(r["date_of_birth"]),
+                hire_date=date.fromisoformat(r["hire_date"]), email=r["email"],
+                active=bool(r["active"]),
+            )
+            for r in self.conn.execute("SELECT * FROM employees ORDER BY full_name")
+        ]
+
+    def add_api_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        permissions,
+        at: datetime | None = None,
+    ) -> "ApiUser":
+        """Record an API user. The password is derived into a verifier and then forgotten."""
+        from . import people
+        from .outage import new_id
+
+        mail = people.check_email(email, who="an API user's email")
+        scope = people.check_permissions(permissions)
+        if self.conn.execute("SELECT 1 FROM api_users WHERE email = ?", (mail,)).fetchone():
+            raise ValueError(f"{mail} is already an API user on this record")
+        verifier, encoded = people.derive_verifier(password)
+        at = at or datetime.now(timezone.utc)
+        user = people.ApiUser(
+            id=new_id("api"), email=mail, permissions=scope, verifier=verifier,
+            kdf=f"pbkdf2_sha256${people.PBKDF2_ITERATIONS}",
+        )
+        self.conn.execute(
+            "INSERT INTO api_users (id,email,permissions,verifier,kdf,created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (user.id, mail, ", ".join(scope), encoded, user.kdf, _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "api_user",
+            {
+                "email": mail,
+                "permissions": list(scope),
+                # the catalogue asks for the password; this record holds a verifier instead, because
+                # the ledger can never forget what it is given. See docs/flows/facility-records.md.
+                "password_verifier": verifier,
+                "password_kdf": user.kdf,
+                "password_note": "verifier only; the plaintext is not stored",
+                "api_user_id": user.id,
+            },
+            at,
+        )
+        return user
+
+    def api_users(self) -> list:
+        from . import people
+
+        return [
+            people.ApiUser(
+                id=r["id"], email=r["email"],
+                permissions=tuple(p.strip() for p in r["permissions"].split(",") if p.strip()),
+                verifier=r["verifier"], kdf=r["kdf"],
+            )
+            for r in self.conn.execute("SELECT * FROM api_users ORDER BY email")
+        ]
+
+    # -- inventory moves and disposal ---------------------------------------
+
+    def move_inventory(self, lot_ref: str, to_room: str, *, note: str = "",
+                       at: datetime | None = None) -> "Lot":
+        """Move a product lot between rooms. A hold stops the move, not just the paperwork."""
+        lot = self.lot(lot_ref)
+        target = self._room_ref(to_room)
+        if lot.room_id == target.id:
+            raise ValueError(
+                f"lot {lot.id} is already in {target.name}; a move to where it sits records nothing"
+            )
+        if lot.on_hold:
+            raise ValueError(
+                f"lot {lot.id} is on hold; a held lot does not move. Release the hold with its cause "
+                f"first (coontie amend --lot {lot.id} --release --cause ...)"
+            )
+        if Decimal(str(lot.quantity)) <= 0:
+            raise ValueError(f"lot {lot.id} holds no quantity; there is nothing to move")
+        at = at or datetime.now(timezone.utc)
+        origin = lot.room_id
+        self.conn.execute("UPDATE lots SET room_id = ? WHERE id = ?", (target.id, lot.id))
+        self.conn.commit()
+        self.ledger.append(
+            "inventory_move",
+            {
+                "facility_location": origin,
+                "inventory_ids": [lot.id],
+                "to_room": target.id,
+                "quantity": str(lot.quantity), "unit": lot.unit,
+                "note": note.strip(),
+            },
+            at,
+            facility_id=self._product_facility(lot.product_id),
+        )
+        return self.lot(lot.id)
+
+    def schedule_disposal_lot(self, lot_ref: str, *, reason: str,
+                              at: datetime | None = None) -> "Disposal":
+        from .cultivation import Disposal, utcnow
+        from .outage import new_id
+        lot = self.lot(lot_ref)
+        if not (reason or "").strip():
+            raise ValueError("a disposal schedule needs a reason")
+        if Decimal(str(lot.quantity)) <= 0:
+            raise ValueError(f"lot {lot.id} holds no quantity; there is nothing to destroy")
+        open_schedule = [
+            d for d in self.disposals()
+            if d.kind == "inventory" and d.disposed_at is None and d.subject == lot.id
+        ]
+        if open_schedule:
+            raise ValueError(
+                f"lot {lot.id} is already scheduled for destruction ({open_schedule[0].id}, "
+                f"reason {open_schedule[0].reason!r}); one schedule, then the wait"
+            )
+        at = at or utcnow()
+        disposal = Disposal(
+            id=new_id("dsp"), kind="inventory", subject=lot.id, reason=reason.strip(),
+            scheduled_at=at, disposed_at=None, weight=Decimal(str(lot.quantity)), unit=lot.unit,
+        )
+        self.conn.execute(
+            "INSERT INTO disposals (id,kind,subject,reason,scheduled_at,disposed_at,weight,unit,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (disposal.id, disposal.kind, disposal.subject, disposal.reason, at.isoformat(), None,
+             str(disposal.weight), disposal.unit, _now()),
+        )
+        self.conn.commit()
+        self.ledger.append(
+            "disposal_schedule_inventory",
+            {"inventory_id": lot.id, "reason": disposal.reason, "disposal_id": disposal.id},
+            at,
+            facility_id=self._product_facility(lot.product_id),
+        )
+        return disposal
+
+    def dispose_lot(self, lot_ref: str, *, at: datetime | None = None) -> "Disposal":
+        """Destroy a scheduled lot. The row stays and its quantity goes to zero."""
+        from .cultivation import require_disposal_wait, utcnow
+        lot = self.lot(lot_ref)
+        match = None
+        for d in self.disposals():
+            if d.kind == "inventory" and d.disposed_at is None and d.subject == lot.id:
+                match = d
+                break
+        if match is None:
+            raise ValueError(
+                f"lot {lot.id} has no destruction scheduled; DH5059 asks for the schedule first "
+                f"(coontie dispose --schedule-lot {lot.id} --reason ...)"
+            )
+        at = at or utcnow()
+        require_disposal_wait(match.scheduled_at, at)
+        destroyed = Decimal(str(lot.quantity))
+        self.conn.execute("UPDATE disposals SET disposed_at = ? WHERE id = ?", (at.isoformat(), match.id))
+        self.conn.execute("UPDATE lots SET quantity = '0' WHERE id = ?", (lot.id,))
+        self.conn.commit()
+        self.ledger.append(
+            "disposal_inventory",
+            {
+                "inventory_id": lot.id, "disposal_id": match.id,
+                "reason": match.reason, "weight": str(destroyed), "unit": lot.unit,
+            },
+            at,
+            facility_id=self._product_facility(lot.product_id),
+        )
+        return [d for d in self.disposals() if d.id == match.id][0]
+
 
     def amendments(self, target_id: str | None = None) -> list:
         sql = "SELECT * FROM amendments"
@@ -1938,6 +2176,23 @@ class Workspace:
             )
             for r in self.conn.execute("SELECT * FROM stock_lots ORDER BY created_at, rowid")
         ]
+
+    def lot(self, ref: str) -> Lot:
+        """Resolve a product lot by full id or unique prefix, and say what matched when ambiguous."""
+        text = (ref or "").strip()
+        if not text:
+            raise ValueError("a lot reference is required")
+        rows = [r for r in self.lots() if r.id == text]
+        if not rows:
+            rows = [r for r in self.lots() if r.id.startswith(text)]
+        if not rows:
+            raise ValueError(f"no product lot matching {ref!r} in this workspace")
+        if len(rows) > 1:
+            raise ValueError(
+                f"{ref!r} matches {len(rows)} lots: {', '.join(sorted(r.id for r in rows)[:5])}; "
+                "give more characters"
+            )
+        return rows[0]
 
     def stock_lot(self, ref: str) -> "StockLot":
         for lot in self.stock_lots():
