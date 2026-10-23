@@ -107,6 +107,37 @@ class TestTheNamedAddress(unittest.TestCase):
             plain.close()
 
 
+class TestTheRefusalSaysWhichAddress(unittest.TestCase):
+    """A 403 with no address in it is a dead end for the operator holding the browser."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "ws.sqlite3"
+        ws = Workspace(self.db)
+        ws.add_facility(Facility(id="f1", name="Sand Pine Cultivation, LLC",
+                                 license_number="MMTC-2026-0031", street="1 Grove Road",
+                                 city="Brooksville", state="FL", zip="34601"))
+        ws.close()
+        self.server = Server(self.db, public_url=TUNNEL)
+
+    def tearDown(self):
+        self.server.close()
+        self.tmp.cleanup()
+
+    def test_a_refused_post_names_the_origin_it_arrived_from(self):
+        status, body = self.server.request(
+            "/operator", host="proxy.example.com", origin="https://proxy.example.com",
+            body="operator=Someone")
+        self.assertEqual(status, 403)
+        self.assertIn("proxy.example.com", body, "the page must name the address it refused")
+        self.assertIn("--public-url", body, "and say which flag widens the record to it")
+
+    def test_a_refused_host_is_named_even_with_no_origin(self):
+        status, body = self.server.request("/operator", host="proxy.example.com", body="operator=X")
+        self.assertEqual(status, 403)
+        self.assertIn("proxy.example.com", body)
+
+
 class TestTheAddressIsCheckedNotTrusted(unittest.TestCase):
     def test_a_url_with_a_scheme_and_host_normalises(self):
         self.assertEqual(web.normalise_public_url("https://X.TryCloudflare.com/"), "https://x.trycloudflare.com")

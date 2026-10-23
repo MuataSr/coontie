@@ -1994,6 +1994,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*gate[:1], gate[1], headers=gate[2])
             return
         if not self._check_host():
+            # a 403 with no record of what was refused is undebuggable, and this is the one refusal a
+            # tunnel, a proxy or a typo'd address will produce. Name the header, never the token.
+            print(f"  refused GET {urllib.parse.urlsplit(self.path).path}: "
+                  f"host={self.headers.get('Host')!r}", flush=True)
             self._send(403, "Host not allowed")
             return
         gate = self._signin_gate()
@@ -2142,7 +2146,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*gate[:1], gate[1], headers=gate[2])
             return
         if not self._check_host() or not self._check_origin():
-            self._send(403, "Request not allowed from here")
+            host = self.headers.get("Host") or ""
+            origin = self.headers.get("Origin") or ""
+            print(f"  refused POST {urllib.parse.urlsplit(self.path).path}: "
+                  f"host={host!r} origin={origin!r}", flush=True)
+            # the commonest cause is a proxy or tunnel in front of the record, and the operator is the
+            # only one who can see which address their browser used. Name it in the page, not just the log
+            self._send(403, (
+                "<h1>Request not allowed from here</h1>"
+                f"<p>The browser reached this record as <code>{esc(host or 'no host header')}</code>"
+                + (f" and posted from <code>{esc(origin)}</code>" if origin else "")
+                + ".</p><p>If that is a tunnel or proxy address, the server has to be started with "
+                  "<code>--public-url</code> naming it.</p>"))
             return
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > 65536:
