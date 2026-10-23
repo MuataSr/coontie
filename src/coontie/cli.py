@@ -1417,7 +1417,8 @@ def cmd_serve(args) -> int:
     from .web import announce, serve
 
     httpd = serve(args.db, port=args.port, verbose=args.verbose, lan=getattr(args, "lan", False),
-                  tls_cert=getattr(args, "tls_cert", None), tls_key=getattr(args, "tls_key", None))
+                  tls_cert=getattr(args, "tls_cert", None), tls_key=getattr(args, "tls_key", None),
+                  public_url=getattr(args, "public_url", "") or "")
     announce(httpd)
     try:
         httpd.serve_forever()
@@ -1745,6 +1746,9 @@ def build_parser() -> argparse.ArgumentParser:
     srv = _db(sub.add_parser("serve", help="start the appliance interface on 127.0.0.1"))
     srv.add_argument("--lan", action="store_true",
                      help="answer paired devices on this machine's LAN address instead of loopback")
+    srv.add_argument("--public-url", metavar="URL",
+                     help="the address a tunnel forwards to this port, e.g. https://x.trycloudflare.com; "
+                          "named, never guessed, because it widens who can read the record")
     srv.add_argument("--tls-cert", help="PEM certificate for --lan (the facility provides it)")
     srv.add_argument("--tls-key", help="PEM private key for --tls-cert")
     srv.add_argument("--port", type=int, default=8080)

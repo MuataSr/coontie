@@ -2358,10 +2358,26 @@ class Workspace:
         return rows[0]
 
     def stock_lot(self, ref: str) -> "StockLot":
-        for lot in self.stock_lots():
-            if lot.id == ref or lot.id.startswith(ref):
-                return lot
-        raise ValueError(f"no stock lot matching {ref!r}")
+        """Resolve a stock lot by full id or unique prefix, and refuse what is not a reference.
+
+        `"".startswith` matching every id meant a manifest line with an empty lot silently shipped the
+        first lot in the record. An ambiguous prefix is refused for the same reason: picking one of two
+        jars is a decision the operator has to make, not one this method may make for them.
+        """
+        text = (ref or "").strip()
+        if not text:
+            raise ValueError("a stock lot reference is required; a manifest line names the lot it carries")
+        rows = [r for r in self.stock_lots() if r.id == text]
+        if not rows:
+            rows = [r for r in self.stock_lots() if r.id.startswith(text)]
+        if not rows:
+            raise ValueError(f"no stock lot matching {ref!r} in this workspace")
+        if len(rows) > 1:
+            raise ValueError(
+                f"{ref!r} matches {len(rows)} lots: {', '.join(sorted(r.id for r in rows)[:5])}; "
+                "give more characters"
+            )
+        return rows[0]
 
     def stock_moves(self, lot_id: str | None = None) -> list[dict]:
         sql = "SELECT * FROM stock_moves"

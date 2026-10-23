@@ -461,6 +461,26 @@ coontie terminal revoke --id dv-471f153ab5         # its next request goes back 
 - **A paired terminal is not a person by itself.** Pairing says which *device* may talk to the
   record. Who is holding it is a second question, answered below.
 
+## A tunnel, when someone has to look from outside
+
+The appliance refuses a request whose `Host` it does not recognise, which is what keeps a page in the
+operator's browser from writing to the record. A tunnel puts a stranger's hostname on every request, so
+serving one means naming that address out loud:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8099     # a quick tunnel, no account
+coontie serve --port 8099 --public-url https://your-name.trycloudflare.com
+```
+
+- **The address is typed, never inferred.** Widening the check to "whatever `Host` arrives" would be the
+  check deleting itself. One named host is allowed, and every other hostname is still refused, which is a
+  test.
+- **It is public, and the bind line says so.** Anyone holding the link can read the record; writes still
+  need the session token from the page, and enrol a passphrase before the link goes out.
+- **A quick tunnel is not a deployment.** Its address changes on every restart and dies with the host. For
+  a facility that needs a stable link, the tunnel is the wrong tool and a reverse proxy with a real
+  certificate is the right one.
+
 ## Who is holding it
 
 The name beside a record was a typed string for most of this build, and every screen said so. A tablet

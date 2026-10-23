@@ -201,3 +201,40 @@ class TestTheScreen(base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheWindowTitleSaysThePageName(unittest.TestCase):
+    """The `<title>` said "Notes" while the page said "Today", because a loop rebound the heading."""
+
+    def setUp(self):
+        import tempfile
+        from coontie.workspace import Facility, Room, Workspace
+
+        self.tmp = tempfile.TemporaryDirectory()
+        db = Path(self.tmp.name) / "ws.sqlite3"
+        ws = Workspace(db)
+        ws.add_facility(Facility(id="f1", name="Sand Pine Cultivation, LLC",
+                                 license_number="MMTC-2026-0031", street="1 Grove Road",
+                                 city="Brooksville", state="FL", zip="34601"))
+        ws.add_room(Room(id="g1", facility_id="f1", kind="grow", name="G1", number="01"))
+        ws.close()
+        self.db = db
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_title_is_the_heading_not_the_last_severity_group(self):
+        from coontie import web, theme
+
+        app = web.App(self.db)
+        ws = web.Workspace(self.db)
+        try:
+            html = app.render_today(ws, operator="Ana Ruiz")
+        finally:
+            ws.close()
+        title = html.split("<title>", 1)[1].split(" · Coontie", 1)[0]
+        heading = html.split("<h1>", 1)[1].split("</h1>", 1)[0]
+        self.assertEqual(title, heading)
+        for key in ("today.breaches", "today.exposures", "today.notes"):
+            self.assertNotEqual(title, theme.say(app.voice, key),
+                                "the window title must not carry a severity group's name")

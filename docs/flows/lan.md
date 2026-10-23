@@ -61,6 +61,20 @@ a day behind. That is the pain this increment answers.
 - a device cookie whose device has been revoked
 - `--tls-cert` without `--tls-key`, or a certificate that does not load
 
+## A named public address, for a tunnel
+
+A tunnel forwards to loopback and rewrites `Host`, so the two checks refuse it. The answer is not to
+trust the header: it is `--public-url <scheme://host>`, typed by the operator, which adds exactly that
+host to the `Host` allowlist and exactly that origin to the `Origin` allowlist.
+
+- `normalise_public_url` accepts `https://host` and `https://host/`, refuses a missing scheme, a scheme
+  that is not http(s), and any path, query or fragment. A path would mean the operator is pointing the
+  flag at something the `Host` check does not cover.
+- The bind line prints the address and says, in words, that it is public: anyone holding the link can
+  read, writes still need the session token, and a passphrase should be enrolled first.
+- Without the flag the tunnel hostname is still refused, which is a test. With it, every other hostname
+  and origin is still refused, which is four more.
+
 ## What it does not do
 
 - **No internet exposure.** No port forwarding, no tunnel, no cloud relay. A facility that wants remote

@@ -740,12 +740,14 @@ class App:
         groups = [(BREACH, self.say("today.breaches")), (EXPOSURE, self.say("today.exposures")),
                   (NOTE, self.say("today.notes"))]
         any_rows = False
-        for severity, heading in groups:
+        # `label`, not `heading`: the loop used to rebind the page heading, so the window title read
+        # the last severity group ("Notes") while the page itself said "Today"
+        for severity, label in groups:
             rows = [f for f in findings if f.severity == severity]
             if not rows:
                 continue
             any_rows = True
-            body.append(f"<h2>{esc(heading)}</h2><ul class='findings'>")
+            body.append(f"<h2>{esc(label)}</h2><ul class='findings'>")
             for f in rows:
                 link = _finding_link(f, FIX_ROUTES, self.say("finding.fix"))
                 cite = f'<span class="cite">({esc(f.citation)})</span>' if f.citation else ""
@@ -1846,6 +1848,10 @@ class Handler(BaseHTTPRequestHandler):
                    f"http://localhost:{port}", f"https://localhost:{port}"}
         if getattr(self.server, "lan", False):
             allowed |= {f"{scheme}://{host}:{port}", f"{scheme}://{host}"}
+        public = getattr(self.server, "public_origin", "")
+        if public:
+            # exactly the address the operator named for the tunnel, nothing wider
+            allowed |= {public, public.replace("https://", "http://")}
         return origin in allowed
 
     def _check_host(self) -> bool:
@@ -1855,6 +1861,9 @@ class Handler(BaseHTTPRequestHandler):
         allowed = {f"{bound}:{port}", f"localhost:{port}", f"127.0.0.1:{port}"}
         if getattr(self.server, "lan", False):
             allowed |= {bound, f"localhost", "127.0.0.1"}
+        public = getattr(self.server, "public_origin", "")
+        if public:
+            allowed |= {public.split("://", 1)[1], public.split("://", 1)[1].split(":")[0]}
         return host in allowed
 
     def _device_token(self) -> str:
@@ -2767,11 +2776,31 @@ def apply_inventory_form(ws: Workspace, action: str, values: dict, operator: str
 
 
 
+def normalise_public_url(url: str) -> str:
+    """`https://host/path/` becomes `https://host`. A tunnel address has no path; refuse one that does."""
+    text = (url or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        raise SystemExit("--public-url needs a scheme, e.g. https://example.trycloudflare.com")
+    scheme, rest = text.split("://", 1)
+    scheme = scheme.lower()
+    if scheme not in ("http", "https"):
+        raise SystemExit(f"--public-url must be http or https, not {scheme}")
+    host = rest.strip().lower()
+    if host.endswith("/"):
+        host = host[:-1]  # a pasted address usually ends in one; that is still the bare host
+    if not host or "/" in host or "?" in host or "#" in host:
+        raise SystemExit("--public-url must be a bare host, with no path, query or fragment")
+    return f"{scheme}://{host}"
+
+
 def serve(db_path: str | Path, *, port: int = 8080, host: str = "127.0.0.1",
           verbose: bool = False, lan: bool = False,
-          tls_cert: str | Path | None = None, tls_key: str | Path | None = None
+          tls_cert: str | Path | None = None, tls_key: str | Path | None = None,
+          public_url: str = ""
           ) -> ThreadingHTTPServer:
-    """Build the server. Loopback by default; a LAN build must have a paired device and says so."""
+    """Build the server. Loopback by default; LAN and a named public address are each a decision."""
     from . import devices, theme
 
     if lan:
@@ -2807,6 +2836,7 @@ def serve(db_path: str | Path, *, port: int = 8080, host: str = "127.0.0.1",
     httpd.verbose = verbose
     httpd.daemon_threads = True
     httpd.lan = bool(lan)
+    httpd.public_origin = normalise_public_url(public_url)
     httpd.tls = bool(tls_cert and tls_key)
     if httpd.tls:
         import ssl
@@ -2825,6 +2855,10 @@ def announce(httpd: ThreadingHTTPServer) -> str:
     scheme = "https" if getattr(httpd, "tls", False) else "http"
     url = f"{scheme}://{host}:{port}/"
     print(f"coontie serve on {url}  (ctrl-c to stop)", flush=True)
+    if getattr(httpd, "public_origin", ""):
+        print(f"  reachable at {httpd.public_origin} through the tunnel in front of it", flush=True)
+        print("  that address is public: anyone holding the link can read this record, and every write "
+              "still needs the session token from this page", flush=True)
     if getattr(httpd, "lan", False):
         print("  this build answers paired devices on this network, not loopback alone", flush=True)
         if not getattr(httpd, "tls", False):
