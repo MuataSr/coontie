@@ -441,6 +441,40 @@ def cmd_api_user(args) -> int:
     return 0
 
 
+def cmd_terminal(args) -> int:
+    from . import devices
+
+    ws = _ws(args)
+    try:
+        actor = getattr(args, "actor", None) or "the server operator"
+        if args.terminal_command == "add":
+            device, code = devices.add_device(ws, args.name, actor=actor)
+            print(f"terminal {device.id}: {device.name}")
+            print()
+            print(f"  pairing code: {code}")
+            print()
+            print("  It works once and expires in fifteen minutes. Type it into the device's browser at")
+            print("  the /pair page; nothing else on this machine needs the code.")
+            print("  The record keeps a verifier, never the code and never the device's token.")
+            return 0
+        if args.terminal_command == "list":
+            rows = devices.list_devices(ws)
+            if not rows:
+                print("no terminals paired; this record answers loopback alone")
+                return 0
+            for device in rows:
+                print(devices.describe(device))
+            return 0
+        device = devices.revoke(ws, args.terminal_id, actor=actor)
+        print(f"{device.id} revoked; its next request is sent to /pair")
+        return 0
+    except devices.DeviceError as exc:
+        sys.exit(str(exc))
+    finally:
+        ws.close()
+    return 0
+
+
 def cmd_outbox(args) -> int:
     from . import transmission
 
@@ -1311,10 +1345,11 @@ def cmd_brief(args) -> int:
 
 
 def cmd_serve(args) -> int:
-    """The appliance interface, on loopback."""
+    """The appliance interface: loopback by default, paired terminals with --lan."""
     from .web import announce, serve
 
-    httpd = serve(args.db, port=args.port, verbose=args.verbose)
+    httpd = serve(args.db, port=args.port, verbose=args.verbose, lan=getattr(args, "lan", False),
+                  tls_cert=getattr(args, "tls_cert", None), tls_key=getattr(args, "tls_key", None))
     announce(httpd)
     try:
         httpd.serve_forever()
@@ -1640,6 +1675,10 @@ def build_parser() -> argparse.ArgumentParser:
     brf.set_defaults(func=cmd_brief)
 
     srv = _db(sub.add_parser("serve", help="start the appliance interface on 127.0.0.1"))
+    srv.add_argument("--lan", action="store_true",
+                     help="answer paired devices on this machine's LAN address instead of loopback")
+    srv.add_argument("--tls-cert", help="PEM certificate for --lan (the facility provides it)")
+    srv.add_argument("--tls-key", help="PEM private key for --tls-cert")
     srv.add_argument("--port", type=int, default=8080)
     srv.add_argument("--verbose", action="store_true", help="log each request")
     srv.set_defaults(func=cmd_serve)
@@ -1693,6 +1732,20 @@ def build_parser() -> argparse.ArgumentParser:
                       help="used to derive a verifier; the plaintext is never stored")
     apiu.add_argument("--at")
     apiu.set_defaults(func=cmd_api_user)
+
+    # `device` already means a DH5059 delivery device, so a paired tablet is a terminal
+    term = _db(sub.add_parser("terminal", help="pair a tablet or a second workstation on the LAN"))
+    term_sub = term.add_subparsers(dest="terminal_command", required=True)
+    term_add = term_sub.add_parser("add", help="mint a pairing code for one terminal")
+    term_add.add_argument("--name", required=True, help="what it is, e.g. 'cure room tablet'")
+    term_add.add_argument("--actor", help="who is pairing it")
+    term_add.set_defaults(func=cmd_terminal)
+    term_list = term_sub.add_parser("list", help="what is paired, and when each was last seen")
+    term_list.set_defaults(func=cmd_terminal)
+    term_rev = term_sub.add_parser("revoke", help="stop a terminal from reading this record")
+    term_rev.add_argument("--id", required=True, dest="terminal_id")
+    term_rev.add_argument("--actor", help="who is revoking it")
+    term_rev.set_defaults(func=cmd_terminal)
 
     obx = _db(sub.add_parser("outbox", help="what has not reached the department yet"))
     obx.add_argument("--at")

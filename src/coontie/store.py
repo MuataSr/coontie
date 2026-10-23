@@ -66,8 +66,12 @@ class Ledger:
 
     def __init__(self, path: str | Path = ":memory:"):
         self.path = str(path)
-        self.conn = sqlite3.connect(self.path)
+        # autocommit: a read must not leave a snapshot that blocks another connection's write, and the
+        # appliance is threaded, so two connections to one file is the normal case rather than the
+        # exception. Writes take BEGIN IMMEDIATE explicitly, below.
+        self.conn = sqlite3.connect(self.path, isolation_level=None, timeout=10)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         self.conn.executescript(SCHEMA)
         self.conn.commit()
 
@@ -86,16 +90,22 @@ class Ledger:
         recorded_s = recorded_at.astimezone(timezone.utc).isoformat()
         payload_json = _canonical(payload)
 
-        row = self.conn.execute("SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
-        prev = row["hash"] if row else GENESIS
-        digest = _hash(prev, event_key, occurred_s, recorded_s, payload_json)
-
-        cur = self.conn.execute(
-            "INSERT INTO events (event_key, occurred_at, recorded_at, facility_id, payload, prev_hash, hash)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (event_key, occurred_s, recorded_s, facility_id, payload_json, prev, digest),
-        )
-        self.conn.commit()
+        # The chain head must be read and the row written under one write lock, or two writers can
+        # both chain from the same parent. BEGIN IMMEDIATE takes that lock at the start.
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute("SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
+            prev = row["hash"] if row else GENESIS
+            digest = _hash(prev, event_key, occurred_s, recorded_s, payload_json)
+            cur = self.conn.execute(
+                "INSERT INTO events (event_key, occurred_at, recorded_at, facility_id, payload,"
+                " prev_hash, hash) VALUES (?,?,?,?,?,?,?)",
+                (event_key, occurred_s, recorded_s, facility_id, payload_json, prev, digest),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return LedgerEntry(
             seq=cur.lastrowid,
             event_key=event_key,

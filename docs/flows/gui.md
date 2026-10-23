@@ -300,3 +300,18 @@ Added 2026-10-22 with the transmission increment.
   support, which is the rule the whole interface follows.
 - `coontie audit`'s "what this cannot check" now names the outbox rather than stopping at "no
   credentials".
+
+
+## Screen 12, Pair: the only page an unpaired terminal may see
+
+Added 2026-10-23 with the LAN increment (`docs/flows/lan.md`).
+
+- In a LAN build, every request without a paired terminal is a 303 to `/pair`, and `/health` is the
+  only other path that answers.
+- The page carries one field: the ten-character code printed by `coontie terminal add --name …`. It
+  says where the code came from, that it works once and expires in fifteen minutes, and that being
+  paired means this device may read and write the record.
+- It also says what pairing does **not** mean: the operator name is still a claim. That sentence is the
+  honest part of this screen.
+- Five wrong codes from one address lock pairing from that address for fifteen minutes, and the page
+  says how long rather than failing silently.

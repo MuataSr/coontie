@@ -249,6 +249,20 @@ CREATE TABLE IF NOT EXISTS disposals (
     unit         TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL
 );
+-- A paired tablet is a terminal. `devices` already means a DH5059 delivery device
+-- (upid, inventory_type, unit_count), so the two must never share a name.
+CREATE TABLE IF NOT EXISTS terminals (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    code_verifier  TEXT NOT NULL DEFAULT '',
+    code_expires_at TEXT,
+    token_verifier TEXT NOT NULL DEFAULT '',
+    added_by       TEXT NOT NULL DEFAULT '',
+    added_at       TEXT NOT NULL,
+    paired_at      TEXT,
+    last_seen_at   TEXT,
+    revoked_at     TEXT
+);
 CREATE TABLE IF NOT EXISTS transmissions (
     id               TEXT PRIMARY KEY,
     envelope_path    TEXT NOT NULL,
@@ -464,7 +478,8 @@ class Workspace:
     def __init__(self, path: str | Path):
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, timeout=10)
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.conn.commit()

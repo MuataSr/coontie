@@ -614,6 +614,9 @@ class App:
         self.db_path = Path(db_path)
         self.token = secrets.token_urlsafe(24)
         self.lock = threading.Lock()
+        from .devices import Limiter
+
+        self.limiter = Limiter()
         self.reload_appearance()
 
     def reload_appearance(self) -> None:
@@ -1373,6 +1376,30 @@ class App:
         return self._page(title="Setup", body="\n".join(body), here="/setup", operator=operator,
                     facility=(facility.name if facility else ""), token=self.token)
 
+    def render_pair(self, *, error: str = "", done: str = "") -> str:
+        """The only page a device may see before it is paired. One field, and where the code came from."""
+        body = ["<h1>Pair this device</h1>",
+                "<p class='lede'>This record lives on one machine and answers the devices its operator "
+                "has paired.</p>"]
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
+        if done:
+            body.append(f"<div class='note'>{esc(done)}</div>")
+        body.append(
+            "<form method='post' action='/pair'>"
+            "<label for='code'>Pairing code</label>"
+            "<input type='text' id='code' name='code' autocomplete='off' autocapitalize='characters' "
+            "spellcheck='false' placeholder='ten characters, from the server' autofocus>"
+            "<button type='submit'>Pair</button></form>")
+        body.append("<p class='context'>At the server, run "
+                    "<code>coontie terminal add --name 'cure room tablet'</code>. It prints a code that "
+                    "works once and expires in fifteen minutes. A code is not a password: it cannot be "
+                    "reused, and five wrong tries from one device send it here no further.</p>")
+        body.append("<p class='context'>Being paired means this device may read and write this record. "
+                    "It does not say who is holding it: the operator name stays a claim, exactly as it "
+                    "does at the server itself.</p>")
+        return page(title="Pair this device", body="\n".join(body))
+
     def render_outbox(self, ws: Workspace, operator: str, *, values: dict | None = None,
                       error: str = "", done: str = "") -> str:
         from . import transmission
@@ -1681,18 +1708,55 @@ class Handler(BaseHTTPRequestHandler):
     def _expected_host(self) -> str:
         return f"{self.server.server_address[0]}:{self.server.server_address[1]}"
 
-    def _check_host(self) -> bool:
-        host = (self.headers.get("Host") or "").strip().lower()
-        allowed = {self._expected_host().lower(), f"localhost:{self.server.server_address[1]}"}
-        return host in allowed
-
     def _check_origin(self) -> bool:
         origin = self.headers.get("Origin")
         if origin is None:
             return True  # same-origin form posts from older browsers; the token still applies
         origin = origin.strip().lower()
+        host, port = self.server.server_address[0], self.server.server_address[1]
+        scheme = "https" if getattr(self.server, "tls", False) else "http"
+        allowed = {f"{scheme}://127.0.0.1:{port}", f"http://127.0.0.1:{port}",
+                   f"http://localhost:{port}", f"https://localhost:{port}"}
+        if getattr(self.server, "lan", False):
+            allowed |= {f"{scheme}://{host}:{port}", f"{scheme}://{host}"}
+        return origin in allowed
+
+    def _check_host(self) -> bool:
+        host = (self.headers.get("Host") or "").strip().lower()
         port = self.server.server_address[1]
-        return origin in {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+        bound = str(self.server.server_address[0]).lower()
+        allowed = {f"{bound}:{port}", f"localhost:{port}", f"127.0.0.1:{port}"}
+        if getattr(self.server, "lan", False):
+            allowed |= {bound, f"localhost", "127.0.0.1"}
+        return host in allowed
+
+    def _device_token(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == "coontie_device":
+                return value
+        return ""
+
+    def _paired_device(self):
+        from . import devices
+
+        ws = self._ws()
+        try:
+            return devices.by_token(ws, self._device_token())
+        finally:
+            ws.close()
+
+    def _device_gate(self) -> tuple | None:
+        """In LAN mode, an unpaired device is sent to the pair page and nothing else is served."""
+        if not getattr(self.server, "lan", False):
+            return None
+        path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
+        if path in ("/pair", "/health"):
+            return None
+        if self._paired_device() is not None:
+            return None
+        return (303, "", {"Location": "/pair"})
 
     def _cookie_token(self) -> str:
         raw = self.headers.get("Cookie") or ""
@@ -1751,6 +1815,10 @@ class Handler(BaseHTTPRequestHandler):
     # -- verbs ---------------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802
+        gate = self._device_gate()
+        if gate is not None:
+            self._send(*gate[:1], gate[1], headers=gate[2])
+            return
         if not self._check_host():
             self._send(403, "Host not allowed")
             return
@@ -1758,6 +1826,13 @@ class Handler(BaseHTTPRequestHandler):
         operator = self._operator()
         if path == "/health":
             self._send(200, "ok", ctype="text/plain; charset=utf-8")
+            return
+        if path == "/pair":
+            params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
+                                                 keep_blank_values=True))
+            self._send(200, self.app.render_pair(error=params.get("error", ""),
+                                                 done=params.get("done", "")),
+                       headers=self._session_cookie())
             return
         if path == "/":
             self._with_ws(lambda ws: self.app.render_today(ws, operator))
@@ -1873,6 +1948,10 @@ class Handler(BaseHTTPRequestHandler):
             ))
 
     def _post(self) -> None:
+        gate = self._device_gate()
+        if gate is not None:
+            self._send(*gate[:1], gate[1], headers=gate[2])
+            return
         if not self._check_host() or not self._check_origin():
             self._send(403, "Request not allowed from here")
             return
@@ -1882,12 +1961,54 @@ class Handler(BaseHTTPRequestHandler):
             return
         raw = self.rfile.read(length).decode("utf-8", "replace")
         form = urllib.parse.parse_qs(raw, keep_blank_values=True)
-        token = (form.get("token") or [""])[0]
-        if not secrets.compare_digest(token, self.app.token) or \
-                not secrets.compare_digest(self._cookie_token(), self.app.token):
-            self._send(403, "Session token missing or wrong. Reload the page and try again.")
-            return
         path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
+        if path != "/pair":
+            # /pair carries its own secret (a one-time code) and no session yet; every other write
+            # needs the session token in both the form and the cookie.
+            token = (form.get("token") or [""])[0]
+            if not secrets.compare_digest(token, self.app.token) or \
+                    not secrets.compare_digest(self._cookie_token(), self.app.token):
+                self._send(403, "Session token missing or wrong. Reload the page and try again.")
+                return
+
+        if path == "/pair":
+            from . import devices
+
+            address = self.client_address[0]
+            wait = self.app.limiter.retry_after(address)
+            if wait:
+                self.send_response(303)
+                self.send_header("Location", "/pair?error=" + urllib.parse.quote(
+                    f"too many wrong codes from this device; try again in {wait // 60 + 1} minutes"))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            code = (form.get("code") or [""])[0]
+            ws = self._ws()
+            try:
+                device, token = devices.pair(ws, code)
+            except (devices.DeviceError, ValueError) as exc:
+                self.app.limiter.fail(address)
+                ws.close()
+                self.send_response(303)
+                self.send_header("Location", "/pair?error=" + urllib.parse.quote(str(exc)))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            self.app.limiter.clear(address)
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie",
+                             f"coontie_device={token}; HttpOnly; SameSite=Strict; Path=/; "
+                             f"Max-Age=31536000")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
 
         if path == "/operator":
             name = (form.get("operator") or [""])[0].strip()[:80]
@@ -2404,20 +2525,61 @@ def apply_inventory_form(ws: Workspace, action: str, values: dict, operator: str
 
 
 def serve(db_path: str | Path, *, port: int = 8080, host: str = "127.0.0.1",
-          verbose: bool = False) -> ThreadingHTTPServer:
-    """Build the server. Only loopback is allowed; --lan is a separate increment."""
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        raise SystemExit("the appliance serves loopback only; a LAN build is a separate increment")
+          verbose: bool = False, lan: bool = False,
+          tls_cert: str | Path | None = None, tls_key: str | Path | None = None
+          ) -> ThreadingHTTPServer:
+    """Build the server. Loopback by default; a LAN build must have a paired device and says so."""
+    from . import devices
+
+    if lan:
+        if tls_cert and not tls_key or tls_key and not tls_cert:
+            raise SystemExit("TLS needs both --tls-cert and --tls-key, or neither")
+        if host in ("", "0.0.0.0"):
+            host = devices.lan_address()
+            if not host:
+                raise SystemExit("this machine has no LAN address; --lan cannot bind")
+        elif not devices.address_is_local(host) and host not in ("127.0.0.1", "localhost"):
+            raise SystemExit(f"{host} is not an address on this machine")
+        ws = Workspace(db_path)
+        try:
+            live = [d for d in devices.list_devices(ws) if d.revoked_at is None]
+            if not live:
+                raise SystemExit(
+                    "no terminal is registered, so --lan would open a record on a port with nothing "
+                    "allowed in. Run `coontie terminal add --name 'cure room tablet'` first.")
+        finally:
+            ws.close()
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit("the appliance serves loopback only; use --lan for a network build")
+
     app = App(db_path)
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.verbose = verbose
     httpd.daemon_threads = True
+    httpd.lan = bool(lan)
+    httpd.tls = bool(tls_cert and tls_key)
+    if httpd.tls:
+        import ssl
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        try:
+            context.load_cert_chain(str(tls_cert), str(tls_key))
+        except (OSError, ssl.SSLError) as exc:
+            raise SystemExit(f"that certificate and key do not load: {exc}")
+        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
     return httpd
 
 
 def announce(httpd: ThreadingHTTPServer) -> str:
     host, port = httpd.server_address[0], httpd.server_address[1]
-    url = f"http://{host}:{port}/"
+    scheme = "https" if getattr(httpd, "tls", False) else "http"
+    url = f"{scheme}://{host}:{port}/"
     print(f"coontie serve on {url}  (ctrl-c to stop)", flush=True)
+    if getattr(httpd, "lan", False):
+        print("  this build answers paired devices on this network, not loopback alone", flush=True)
+        if not getattr(httpd, "tls", False):
+            print("  traffic on this network is unencrypted; provide --tls-cert and --tls-key if the "
+                  "network is not one you control", flush=True)
+        print("  pair a device with: coontie terminal add --name 'cure room tablet'", flush=True)
     return url

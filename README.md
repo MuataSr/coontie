@@ -438,6 +438,29 @@ required as a hidden field on every POST), `Origin` and `Host` checked on every 
 generated CSP that forbids scripts, and no binding outside loopback. The operator name is a claim
 for attribution; the OS login is the boundary.
 
+## A tablet in the cure room, without the internet
+
+The record answers loopback by default. A facility's real problem is physical: the person who harvests
+is in a wet room with gloves on, and the record is on a PC in an office.
+
+```bash
+coontie terminal add --name "cure room tablet"     # prints a code that works once, for 15 minutes
+coontie serve --lan                                # answers this machine's LAN address
+coontie terminal list                              # what is paired, and when each was last seen
+coontie terminal revoke --id dv-471f153ab5         # its next request goes back to /pair
+```
+
+- **Every terminal is paired by a person at the server.** The code works once, expires in fifteen
+  minutes, and is stored as a PBKDF2 verifier; the device's token is stored the same way, so neither
+  appears in the database, the backups, the exports or the printed audit.
+- **Nothing reaches the internet.** No port forwarding, no tunnel, no cloud relay. `--lan` binds this
+  machine's own address and refuses to start unless a terminal is registered.
+- **Traffic is unencrypted unless the facility provides a certificate.** `--tls-cert`/`--tls-key` take
+  a PEM it already owns; without them the bind line says, in words, that the network is not encrypted.
+  Standard library can load a certificate and cannot invent one, and inventing one would be worse.
+- **A paired terminal is not a person.** The operator name stays a claim. Per-person passphrases are a
+  separate increment, named as outstanding rather than implied. Spec: `docs/flows/lan.md`.
+
 ## The outbox: what has not reached the department
 
 DH5059 gives 28 event types a twelve-hour window and 5 a real-time one. Coontie has no department
