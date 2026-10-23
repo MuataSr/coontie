@@ -689,6 +689,22 @@ def cmd_drill(args) -> int:
 
 def cmd_theme(args) -> int:
     from . import theme
+    from .web import form_fields
+
+    # third-party packs first, so `--list` shows them and `--check` can refuse a bad one
+    refused = theme.load_packs(fields=form_fields())
+    for line in refused:
+        print(f"pack refused: {line}")
+    if args.packs:
+        print(f"packs in {theme.packs_dir()}:")
+        for name in sorted(set(theme.SKINS) - theme.BUILTIN_SKINS):
+            print(f"  look  {name:12s} {theme.SKIN_TITLES.get(name, '')}")
+        for name in sorted(set(theme.VOICES) - theme.BUILTIN_VOICES):
+            print(f"  voice {name:12s} {theme.VOICE_TITLES.get(name, '')}")
+        if not (set(theme.SKINS) - theme.BUILTIN_SKINS or set(theme.VOICES) - theme.BUILTIN_VOICES):
+            print("  (none; a pack is one JSON file: {\"kind\": \"look\"|\"voice\", \"name\": \"...\","
+                  " \"tokens\"|\"labels\": {…}})")
+        return 0 if not refused else 1
 
     ws = _ws(args)
     if args.set:
@@ -705,7 +721,9 @@ def cmd_theme(args) -> int:
         return 0
 
     if args.check:
-        problems = theme.check_all()
+        from .web import form_fields
+
+        problems = theme.check_all(fields=form_fields())
         for key, term in theme.TERMS.items():
             if not theme.catalogue_reference(term):
                 problems.append(f"{key} points at {term}, which the record cannot cite")
@@ -1848,6 +1866,7 @@ def build_parser() -> argparse.ArgumentParser:
     thm.add_argument("--voice")
     thm.add_argument("--actor", help="who chose it; the choice goes on the record")
     thm.add_argument("--check", action="store_true", help="prove the installed ones, and the built-ins, hold")
+    thm.add_argument("--packs", action="store_true", help="third-party looks and voices that loaded")
     thm.set_defaults(func=cmd_theme)
 
     lnk = _db(sub.add_parser("link", help="attach the department inventory id to a lot"))

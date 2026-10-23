@@ -490,6 +490,18 @@ coontie passphrase --id emp-3f81c0 --forget --actor "Maria Lopez"
   command line. The OS login is the boundary for whoever is at the server, and this appliance has no
   network to mail a reset link over. Spec and refusals: `docs/flows/operators.md`. Spec: `docs/flows/lan.md`.
 
+A voice carries further than headings. The same pack renames **form fields** (`Which batch`,
+`How many went in`, `How many came back`) while refusals, exports and printed evidence keep the
+department's exact words, because those come from the write path rather than the label table. The
+vocabulary is read from the form specs themselves, so a field added tomorrow is thematic the moment it
+renders. `coontie theme --check` refuses a pack that names a field the program does not have.
+Spec: `docs/flows/field-words.md`.
+
+A third party can ship a look or a voice without touching the program: one JSON file under
+`~/.config/coontie/themes/`, checked by the published contract before it is registered, never allowed to
+take a built-in name, and reported rather than fatal when refused. `coontie theme --packs` lists what
+loaded. Spec: `docs/flows/theme-packs.md`.
+
 ## The screen that changes the product
 
 Today is a compliance queue, not a dashboard. Breaches come first with the rule that makes them

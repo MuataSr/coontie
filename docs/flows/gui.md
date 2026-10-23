@@ -247,6 +247,23 @@ licensee should reach a working record in one sitting.
 
 ---
 
+## Field words, added with the voice increment
+
+Every form renders through `App._form()`, which applies the installed voice's
+`field.<action>.<field>` override and otherwise shows the label the spec was written with. The
+vocabulary is derived from the form specs at call time, so a field added tomorrow is thematic the moment
+it renders, and `coontie theme --check` refuses a pack that names a field the program does not have.
+Refusals, exports, manifests and the printed audit never pass through the label table: those come from
+the write path. Spec: `docs/flows/field-words.md`.
+
+## Packs, added with the plugin-loader increment
+
+A third party adds a look or a voice as one JSON file under `~/.config/coontie/themes/` (or
+`COONTIE_THEMES`). `coontie serve` loads them at startup and `coontie theme --packs` lists them;
+each is checked by `check_skin`/`check_voice` before registration, may not take a built-in name, and is
+reported rather than fatal when refused. A label carrying `<` or `>` is now refused, which closed the
+one hole the loader exposed in an otherwise published contract. Spec: `docs/flows/theme-packs.md`.
+
 ## Build order
 
 Five steps, each shippable and each ending in a gate test that posts the real forms over HTTP and

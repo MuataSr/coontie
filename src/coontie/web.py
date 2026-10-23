@@ -558,16 +558,35 @@ PROCESS_FORMS = [
 ]
 
 
+def form_fields() -> frozenset:
+    """Every (action, field) this module renders, gathered from the specs at call time.
+
+    Read at call time rather than at import: the form lists are defined lower in the file than the
+    class that renders them, and a snapshot taken at import would be missing whichever list was
+    added last.
+    """
+    return _form_fields(
+        [value for key, value in globals().items() if key.endswith("_FORMS") and isinstance(value, list)])
+
+
+def _form_fields(lists) -> frozenset:
+    """Every (action, field) the interface actually renders, derived from the specs rather than typed."""
+    return frozenset((spec["action"], field[0]) for forms in lists for spec in forms
+                     for field in spec["fields"])
+
+
 def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] = (),
-               open_it: bool = False, suggested: dict | None = None) -> str:
+               open_it: bool = False, suggested: dict | None = None, labeler=None) -> str:
     suggested = suggested or {}
+    # a voice may rename a field label; the fallback is the wording the form was written with
+    labeler = labeler or (lambda action, name, canonical: canonical)
     fields = []
     for name, label, placeholder, *choice in spec["fields"]:
         value = esc(values.get(f"{spec['action']}__{name}", "") or suggested.get(name, ""))
         focus = " autofocus" if name == spec["fields"][0][0] and not values else ""
         if choice and choice[0] == "password":
             fields.append(
-                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
+                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(labeler(spec['action'], name, label))}</label>"
                 f"<input id='{esc(spec['action'])}_{esc(name)}' "
                 f"name='{esc(spec['action'])}__{esc(name)}' type='password' value='' "
                 f"placeholder='{esc(placeholder)}' autocomplete='new-password' "
@@ -580,7 +599,7 @@ def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] =
                 for room in rooms
             )
             fields.append(
-                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
+                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(labeler(spec['action'], name, label))}</label>"
                 f"<select id='{esc(spec['action'])}_{esc(name)}' "
                 f"name='{esc(spec['action'])}__{esc(name)}'>{options}</select>"
             )
@@ -588,7 +607,7 @@ def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] =
         if choice and choice[0] == "textarea":
             key = f"{spec['action']}__{name}"
             fields.append(
-                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
+                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(labeler(spec['action'], name, label))}</label>"
                 f"<textarea id='{esc(spec['action'])}_{esc(name)}' "
                 f"name='{key}' rows='8' "
                 f"placeholder='paste the CSV, header row included'>{esc(values.get(key, ''))}</textarea>"
@@ -603,13 +622,13 @@ def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] =
                 for cause in ALL_CAUSES
             )
             fields.append(
-                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
+                f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(labeler(spec['action'], name, label))}</label>"
                 f"<select id='{esc(spec['action'])}_{esc(name)}' "
                 f"name='{esc(spec['action'])}__{esc(name)}'>{options}</select>"
             )
             continue
         fields.append(
-            f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
+            f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(labeler(spec['action'], name, label))}</label>"
             f"<input id='{esc(spec['action'])}_{esc(name)}' "
             f"name='{esc(spec['action'])}__{esc(name)}' type='text' value='{value}' "
             f"placeholder='e.g. {esc(placeholder)}'{focus}>"
@@ -670,6 +689,14 @@ class App:
         from . import theme
 
         return theme.speak(text, self.voice)
+
+    def say_field(self, action: str, name: str, canonical: str) -> str:
+        from . import theme
+
+        return theme.field_label(self.voice, action, name, canonical)
+
+    def _form(self, spec: dict, values: dict, **kwargs) -> str:
+        return _form_html(spec, values, labeler=self.say_field, **kwargs)
 
     def _page(self, **kwargs) -> str:
         kwargs.setdefault("signed_in", getattr(self.local, "signed_in", False))
@@ -965,7 +992,7 @@ class App:
         if selected:
             for action in suggested:
                 suggested[action] = {"lot": selected}
-        body += [_form_html(spec, values, token=self.token, rooms=names,
+        body += [self._form(spec, values, token=self.token, rooms=names,
                             open_it=spec["action"] == "move",
                             suggested=suggested.get(spec["action"], {}))
                  for spec in INVENTORY_FORMS]
@@ -1098,7 +1125,7 @@ class App:
         ) + "</p>")
         names = tuple(room.name for room in ws.rooms())
         suggest = self._suggest(ws)
-        body += [_form_html(spec, values, token=self.token, rooms=names, open_it=index == 0,
+        body += [self._form(spec, values, token=self.token, rooms=names, open_it=index == 0,
                             suggested=suggest.get(spec["action"], {}))
                  for index, spec in enumerate(PLANT_FORMS)]
         body.append("<footer>coontie batch · plant · move · additive · schedule · harvest</footer>")
@@ -1124,7 +1151,7 @@ class App:
         ) + "</p>")
         names = tuple(room.name for room in ws.rooms())
         suggest = self._suggest(ws)
-        body += [_form_html(spec, values, token=self.token, rooms=names, open_it=index == 0,
+        body += [self._form(spec, values, token=self.token, rooms=names, open_it=index == 0,
                             suggested=suggest.get(spec["action"], {}))
                  for index, spec in enumerate(PROCESS_FORMS)]
         body.append("<footer>coontie cure · lot · split · convert · ingredient · sample · final · "
@@ -1202,7 +1229,7 @@ class App:
         free_lots = [lot for lot in ws.stock_lots() if ws.stock_remaining(lot.id) > 0]
         suggested = {"manifest": {"items": ", ".join(
             f"{lot.id}:{ws.stock_remaining(lot.id)}" for lot in free_lots[:1])}}
-        body += [_form_html(spec, values, token=self.token, rooms=names,
+        body += [self._form(spec, values, token=self.token, rooms=names,
                             open_it=spec["action"] == open_action,
                             suggested=suggested.get(spec["action"], {}))
                  for spec in TRANSPORT_FORMS]
@@ -1263,7 +1290,7 @@ class App:
         lots = ws.lots()
         if len(lots) == 1:
             suggested.setdefault("amend", {})["lot"] = lots[0].id
-        body += [_form_html(spec, values, token=self.token, open_it=index == 0,
+        body += [self._form(spec, values, token=self.token, open_it=index == 0,
                             suggested=suggested.get(spec["action"], {}))
                  for index, spec in enumerate(CORRECT_FORMS)]
         body.append("<footer>coontie amend · justify --send</footer>")
@@ -1420,7 +1447,7 @@ class App:
             f"<a href='#{esc(spec['action'])}'>{esc(spec['verb'])}</a>" for spec in SETUP_FORMS
         ) + "</p>")
         suggested = {"import": {}}
-        body += [_form_html(spec, values, token=self.token, suggested=suggested.get(spec["action"], {}),
+        body += [self._form(spec, values, token=self.token, suggested=suggested.get(spec["action"], {}),
                             open_it=(not facility and spec["action"] == "facility"))
                  for spec in SETUP_FORMS]
         body.append("<footer>coontie init · room · import · export dh5058 · verify</footer>")
@@ -1554,7 +1581,7 @@ class App:
             body.append("</tbody></table>")
 
         for spec in OUTBOX_FORMS:
-            body.append(_form_html(spec, values, token=self.token))
+            body.append(self._form(spec, values, token=self.token))
         body.append("<p class='context'>This build has no department adapter. A folder hand-off copies "
                     "the file and says so; it never reports a record as delivered, because nobody has "
                     "confirmed that it arrived.</p>")
@@ -2745,7 +2772,7 @@ def serve(db_path: str | Path, *, port: int = 8080, host: str = "127.0.0.1",
           tls_cert: str | Path | None = None, tls_key: str | Path | None = None
           ) -> ThreadingHTTPServer:
     """Build the server. Loopback by default; a LAN build must have a paired device and says so."""
-    from . import devices
+    from . import devices, theme
 
     if lan:
         if tls_cert and not tls_key or tls_key and not tls_cert:
@@ -2767,6 +2794,12 @@ def serve(db_path: str | Path, *, port: int = 8080, host: str = "127.0.0.1",
             ws.close()
     elif host not in ("127.0.0.1", "localhost", "::1"):
         raise SystemExit("the appliance serves loopback only; use --lan for a network build")
+
+    # A pack is data checked by the look/voice contract; a refused one is reported here and skipped,
+    # because a broken third-party pack must never be the reason a facility cannot reach its record.
+    refused = theme.load_packs(fields=form_fields())
+    for line in refused:
+        print(f"  theme pack refused: {line}", flush=True)
 
     app = App(db_path)
     handler = type("BoundHandler", (Handler,), {"app": app})

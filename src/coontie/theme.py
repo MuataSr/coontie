@@ -17,8 +17,11 @@ colour outside the token block, and a voice that names a label the program does 
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # The record keeps UTC; the operator reads their own wall clock. One zone name, one place.
@@ -302,6 +305,20 @@ VOICES: dict[str, dict[str, str]] = {
         "sev.breach": "Now",
         "sev.exposure": "Open",
         "sev.note": "Look",
+        # Field labels. Each key names a field the interface really renders, so `theme --check` can
+        # refuse a pack that renames something the program does not have.
+        "field.plant.batch": "Which batch",
+        "field.plant.count": "How many went in",
+        "field.batch.count": "How many",
+        "field.harvest.plants": "Which plants came down",
+        "field.harvest.wet": "Wet weight",
+        "field.cure.post": "Weight after cure",
+        "field.receive.received": "How many arrived",
+        "field.receive.rejected": "How many came back",
+        "field.adjust.remove": "Take this much off",
+        "field.amend.value": "Corrected number",
+        "field.employee.dob": "Date of birth",
+        "field.import.csv": "The file",
     },
     "official": {
         "today.heading": "Today",
@@ -320,6 +337,10 @@ VOICES: dict[str, dict[str, str]] = {
         "sev.breach": "Breach",
         "sev.exposure": "Exposure",
         "sev.note": "Note",
+        "field.harvest.wet": "Wet weight (weight at harvest)",
+        "field.final.expiration": "Expiration date (immutable once recorded)",
+        "field.facility.license": "License number",
+        "field.employee.dob": "Date of birth (not printed on any report)",
     },
 }
 DEFAULT_VOICE = "quiet"
@@ -415,6 +436,26 @@ def greeting(voice: str, when: datetime) -> str:
     return words[2]
 
 
+FIELD_PREFIX = "field."
+
+
+def field_key(action: str, name: str) -> str:
+    """The label-table key for one form field: an action and a field, no free text."""
+    return f"{FIELD_PREFIX}{action}.{name}"
+
+
+def field_label(voice: str, action: str, name: str, canonical: str) -> str:
+    """One field's label in the installed voice, or the wording the form was written with.
+
+    A voice may rename a field; it may not remove one, and it cannot reach a refusal: those come from
+    the record's own write path and never pass through here.
+    """
+    key = field_key(action, name)
+    if voice in VOICES and key in VOICES[voice]:
+        return VOICES[voice][key]
+    return canonical
+
+
 def say(voice: str, key: str) -> str:
     """One label in the installed voice, falling back to the canonical wording."""
     if voice in VOICES and key in VOICES[voice]:
@@ -464,9 +505,19 @@ def check_skin(name: str, tokens: dict[str, str], css: str | None = None) -> lis
     return problems
 
 
-def check_voice(name: str, labels: dict[str, str]) -> list[str]:
+def check_voice(name: str, labels: dict[str, str], *, fields=()) -> list[str]:
+    """Refuse a voice that invents a label or a field, and one that stays silent about a term.
+
+    `fields` is the program's own set of `action.field` pairs, passed in because the form specs live in
+    the interface module and this one must not import it.
+    """
     problems = []
+    known_fields = {field_key(action, name_) for action, name_ in fields}
     for key in labels:
+        if key.startswith(FIELD_PREFIX):
+            if fields and key not in known_fields:
+                problems.append(f"{name}: the program has no field {key[len(FIELD_PREFIX):]!r}")
+            continue
         if key not in CANONICAL:
             problems.append(f"{name}: the program has no label {key!r}")
     for key, term in TERMS.items():
@@ -475,15 +526,17 @@ def check_voice(name: str, labels: dict[str, str]) -> list[str]:
     for key, value in labels.items():
         if not str(value).strip():
             problems.append(f"{name}: {key} is empty")
+        if any(ch in str(value) for ch in "<>"):
+            problems.append(f"{name}: {key} carries markup; a label is words, not a page")
     return problems
 
 
-def check_all() -> list[str]:
+def check_all(*, fields=()) -> list[str]:
     problems = []
     for name, tokens in SKINS.items():
         problems += check_skin(name, tokens)
     for name, labels in VOICES.items():
-        problems += check_voice(name, labels)
+        problems += check_voice(name, labels, fields=fields)
     return problems
 
 
@@ -501,3 +554,84 @@ def describe(skin: str | None = None, voice: str | None = None) -> str:
     if voice:
         lines.append(f"voice: {voice}. {VOICE_TITLES.get(voice, '')}")
     return "\n".join(lines)
+
+
+# -- third-party packs ----------------------------------------------------------------------------
+# A stranger may ship a look or a voice. What makes that safe is not trust in the stranger: it is that a
+# pack is data, that `check_skin` and `check_voice` refuse it if it smuggles a script, a network fetch, a
+# hardcoded colour or a label the program does not have, and that a pack may never take a built-in name.
+# The loader reports what it refused and never guesses at a broken file.
+
+BUILTIN_SKINS = frozenset(SKINS)
+BUILTIN_VOICES = frozenset(VOICES)
+_NAME_OK = re.compile(r"^[a-z][a-z0-9_-]{1,30}$")
+
+
+def packs_dir() -> Path:
+    """Where packs live unless COONTIE_THEMES says otherwise."""
+    override = os.environ.get("COONTIE_THEMES")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".config" / "coontie" / "themes"
+
+
+def _pack_problems(entry, name: str, kind: str, fields) -> list[str]:
+    if kind == "look":
+        problems = check_skin(name, entry.get("tokens") or {})
+        if not isinstance(entry.get("tokens"), dict):
+            problems.append(f"{name}: a look needs a tokens object")
+        return problems
+    labels = entry.get("labels")
+    if not isinstance(labels, dict):
+        return [f"{name}: a voice needs a labels object"]
+    return check_voice(name, labels, fields=fields or ())
+
+
+def load_packs(directory=None, *, fields=None) -> list[str]:
+    """Register every valid pack under `directory`. Returns one line per refused file, never raises."""
+    directory = Path(directory) if directory is not None else packs_dir()
+    problems: list[str] = []
+    if not directory.is_dir():
+        return problems
+    for path in sorted(directory.glob("*.json")):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            problems.append(f"{path.name}: not readable JSON ({exc})")
+            continue
+        if not isinstance(entry, dict):
+            problems.append(f"{path.name}: a pack is a JSON object")
+            continue
+        kind = str(entry.get("kind") or "").strip().lower()
+        name = str(entry.get("name") or "").strip().lower()
+        if kind not in ("look", "voice"):
+            problems.append(f"{path.name}: kind must be 'look' or 'voice', not {kind or 'missing'!r}")
+            continue
+        if not _NAME_OK.match(name):
+            problems.append(f"{path.name}: name {name or 'missing'!r} must be lower case letters, "
+                            "digits, hyphen or underscore")
+            continue
+        if (kind == "look" and name in BUILTIN_SKINS) or (kind == "voice" and name in BUILTIN_VOICES):
+            problems.append(f"{path.name}: {name} is built in; a pack cannot replace it")
+            continue
+        found = _pack_problems(entry, name, kind, fields)
+        if found:
+            problems.extend(f"{path.name}: {line}" for line in found)
+            continue
+        if kind == "look":
+            SKINS[name] = dict(entry["tokens"])
+            SKIN_TITLES[name] = str(entry.get("title") or "Third-party look")
+        else:
+            VOICES[name] = dict(entry["labels"])
+            VOICE_TITLES[name] = str(entry.get("title") or "Third-party voice")
+    return problems
+
+
+def reset_packs() -> None:
+    """Forget every loaded pack, leaving the program exactly as it shipped. Used by tests."""
+    for name in set(SKINS) - BUILTIN_SKINS:
+        SKINS.pop(name, None)
+        SKIN_TITLES.pop(name, None)
+    for name in set(VOICES) - BUILTIN_VOICES:
+        VOICES.pop(name, None)
+        VOICE_TITLES.pop(name, None)

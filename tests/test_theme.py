@@ -92,9 +92,16 @@ class TestSkins(unittest.TestCase):
 
 class TestVoices(unittest.TestCase):
     def test_every_voice_names_only_labels_the_program_has(self):
+        # two vocabularies now: the canonical label keys, and the form fields a voice may rename.
+        # Both are checked here, because a voice that invents either is a pack the contract refuses.
+        from coontie.web import form_fields
+
+        fields = {theme.field_key(action, name) for action, name in form_fields()}
         for name, labels in theme.VOICES.items():
-            unknown = [k for k in labels if k not in theme.CANONICAL]
+            unknown = [k for k in labels if k not in theme.CANONICAL and k not in fields]
             self.assertEqual(unknown, [], f"{name} invents {unknown}")
+            # and the contract itself must agree, so this cannot pass by being generous here
+            self.assertEqual(theme.check_voice(name, labels, fields=form_fields()), [], name)
 
     def test_every_voice_says_something_for_every_word_that_stands_for_a_rule(self):
         for name, labels in theme.VOICES.items():
