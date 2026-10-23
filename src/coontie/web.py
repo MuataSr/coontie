@@ -563,11 +563,12 @@ def _form_html(spec: dict, values: dict, *, token: str, rooms: tuple[str, ...] =
             )
             continue
         if choice and choice[0] == "textarea":
+            key = f"{spec['action']}__{name}"
             fields.append(
                 f"<label for='{esc(spec['action'])}_{esc(name)}'>{esc(label)}</label>"
                 f"<textarea id='{esc(spec['action'])}_{esc(name)}' "
-                f"name='{esc(spec['action'])}__{esc(name)}' rows='8' "
-                f"placeholder='paste the CSV, header row included'>{esc(values.get(f"{spec['action']}__{name}", ""))}</textarea>"
+                f"name='{key}' rows='8' "
+                f"placeholder='paste the CSV, header row included'>{esc(values.get(key, ''))}</textarea>"
             )
             continue
         if choice and choice[0] == "cause":

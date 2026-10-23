@@ -130,6 +130,24 @@ def check_version(problems: list) -> None:
         problems.append(f"version {match.group(1)} is a placeholder")
 
 
+def check_syntax(problems: list) -> None:
+    """Compile every module with the interpreter that runs this check, and say which one it was.
+
+    A syntax feature newer than the declared floor is invisible on a new interpreter: PEP 701 nested
+    f-strings import cleanly on 3.12+ and are a SyntaxError on 3.11. This check can only speak for the
+    interpreter it runs on, so it prints that version and CI carries the matrix that covers the floor.
+    """
+    compiled = 0
+    for path in sorted((ROOT / "src").rglob("*.py")):
+        try:
+            compile(path.read_text(), str(path), "exec")
+            compiled += 1
+        except SyntaxError as exc:
+            problems.append(f"{path.relative_to(ROOT)}: does not compile on {sys.version.split()[0]}: "
+                            f"{exc.msg} (line {exc.lineno})")
+    print(f"  compiled {compiled} module(s) with Python {sys.version.split()[0]}")
+
+
 def check_tests(problems: list) -> None:
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
     out = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"],
@@ -160,7 +178,7 @@ def main(argv=None) -> int:
     for name, check in (("licence", check_licence), ("secrets", check_secrets),
                         ("brand", check_brand), ("paths", check_paths), ("size", check_size),
                         ("screenshots", check_screenshots), ("version", check_version),
-                        ("import", check_import)):
+                        ("syntax", check_syntax), ("import", check_import)):
         before = len(problems)
         check(problems)
         print(f"  {name}: {'ok' if len(problems) == before else 'FAILED'}")
