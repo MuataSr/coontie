@@ -11,7 +11,9 @@ Security model (see docs/flows/gui.md):
   hidden field on every POST;
 - Origin must be this server on every POST, because any page in the operator's browser can POST
   to loopback;
-- the operator name is a claim for attribution, never a credential. The OS login is the boundary.
+- the operator name is a claim for attribution until somebody enrols a passphrase. Once one
+  person has one, the appliance requires sign-in and the name on every record comes from that
+  session; the OS login is the boundary only while nobody is enrolled.
 """
 
 from __future__ import annotations
@@ -213,9 +215,16 @@ def local_time(moment) -> str:
     return moment.astimezone(ZoneInfo("America/New_York")).strftime("%A %-d %B %Y, %H:%M %Z")
 
 
+def _facility_name(ws) -> str:
+    """The facility's own name for the header, or nothing when the record has not been set up yet."""
+    facility = ws.facility()
+    return getattr(facility, "name", "") or ""
+
+
 def page(*, title: str, body: str, here: str = "", facility: str = "", operator: str = "",
          token: str = "", badge: tuple[int, str] | None = None,
-         badge_label: str = "open", look: str = "", voice: str = "") -> str:
+         badge_label: str = "open", look: str = "", voice: str = "",
+         signed_in: bool = False, bare: bool = False) -> str:
     from . import theme
 
     look = look or theme.DEFAULT_SKIN
@@ -225,6 +234,26 @@ def page(*, title: str, body: str, here: str = "", facility: str = "", operator:
         f"{esc(label)}</a>"
         for path, label, key in RAIL
     )
+    if bare:
+        # The sign-in page is the way in: a name box beside it would be a second, weaker way in.
+        who_html = '<span class="muted">Not signed in</span>'
+    elif signed_in and operator:
+        # A name that came from a signed session is not a claim, so it is shown as text and the only
+        # control beside it is the way out.
+        who_html = (f'<form method="post" action="/signout" style="margin:0">'
+                    f'<input type="hidden" name="token" value="{esc(token)}">'
+                    f'<strong class="who">{esc(operator)}</strong>'
+                    f'<button type="submit" class="quiet" style="margin:0 0 0 6px; padding:5px 10px">'
+                    f"Sign out</button></form>")
+    else:
+        who_html = (f'<form method="post" action="/operator" style="margin:0">'
+                    f'<input type="hidden" name="token" value="{esc(token)}">'
+                    f'<label for="operator" style="display:inline; margin:0 6px 0 0; '
+                    f'font-weight:400">Operator</label>'
+                    f'<input id="operator" name="operator" type="text" value="{esc(operator)}" '
+                    f'size="16" placeholder="your name" style="width:150px; display:inline-block">'
+                    f'<button type="submit" class="quiet" style="margin:0 0 0 6px; '
+                    f'padding:5px 10px">Set</button></form>')
     badge_html = ""
     if badge is not None:
         count, target = badge
@@ -239,13 +268,7 @@ def page(*, title: str, body: str, here: str = "", facility: str = "", operator:
   <span class="name">{esc(facility or "Coontie")}</span>
   {badge_html}
   <span class="spacer"></span>
-  <form method="post" action="/operator" style="margin:0">
-    <input type="hidden" name="token" value="{esc(token)}">
-    <label for="operator" style="display:inline; margin:0 6px 0 0; font-weight:400">Operator</label>
-    <input id="operator" name="operator" type="text" value="{esc(operator)}" size="16"
-           placeholder="your name" style="width:150px; display:inline-block">
-    <button type="submit" class="quiet" style="margin:0 0 0 6px; padding:5px 10px">Set</button>
-  </form>
+  {who_html}
 </header>
 <div class="layout">
   <nav aria-label="Sections">{rail}</nav>
@@ -617,6 +640,11 @@ class App:
         from .devices import Limiter
 
         self.limiter = Limiter()
+        from .attempts import Limiter as SignInLimiter
+
+        self.signin_limiter = SignInLimiter()
+        # One server, many handler threads: the person belongs to the request, not to the App.
+        self.local = threading.local()
         self.reload_appearance()
 
     def reload_appearance(self) -> None:
@@ -644,6 +672,7 @@ class App:
         return theme.speak(text, self.voice)
 
     def _page(self, **kwargs) -> str:
+        kwargs.setdefault("signed_in", getattr(self.local, "signed_in", False))
         return page(look=self.look, voice=self.voice, **kwargs)
 
     # -- pages ---------------------------------------------------------------
@@ -1290,11 +1319,18 @@ class App:
         body.append(f"<h2>Employees ({len(employees)})</h2>")
         if employees:
             body.append("<table><thead><tr><th>Name</th><th>Email</th><th>Hired</th>"
-                        "</tr></thead><tbody>")
+                        "<th>Passphrase</th></tr></thead><tbody>")
             for person in employees:
+                state = "Set" if person.can_sign_in else "Not set"
                 body.append(f"<tr><td>{esc(person.full_name)}</td>"
                             f"<td class='ident'>{esc(person.email)}</td>"
-                            f"<td>{esc(person.hire_date.isoformat())}</td></tr>")
+                            f"<td>{esc(person.hire_date.isoformat())}</td>"
+                            f"<td>{esc(state)}</td></tr>")
+            if not any(person.can_sign_in for person in employees):
+                body.append("<tr><td colspan='4' class='muted'>Nobody has a passphrase, so every "
+                            "screen takes a typed name and says so. Enrol one at the machine that "
+                            "holds this record: <code>coontie passphrase --id emp-… --set</code>"
+                            "</td></tr>")
             body.append("</tbody></table>")
         else:
             body.append("<p class='muted'>No employees recorded. A manifest names two, so a "
@@ -1375,6 +1411,54 @@ class App:
         body.append("<footer>coontie init · room · import · export dh5058 · verify</footer>")
         return self._page(title="Setup", body="\n".join(body), here="/setup", operator=operator,
                     facility=(facility.name if facility else ""), token=self.token)
+
+    def render_signin(self, ws: Workspace, operator: str, *, error: str = "",
+                      tries: str = "") -> str:
+        """The way in. Once somebody here has a passphrase, this is the only page that answers."""
+        from . import people
+
+        body = ["<h1>Sign in</h1>"]
+        signers = people.signers(ws)
+        if operator and getattr(self.local, "signed_in", False):
+            body.append(f"<p class='lede'>You are signed in as <strong>{esc(operator)}</strong>. The "
+                        "name on everything you record this session comes from here, not from a "
+                        "text box.</p>")
+            body.append("<p><a class='button' href='/'>Go to Today</a></p>")
+            return self._page(title="Sign in", body="\n".join(body), here="/signin",
+                              operator=operator, facility=_facility_name(ws))
+
+        body.append("<p class='lede'>This record now asks who is holding it. Signing in puts your "
+                    "own name beside everything you write until you sign out.</p>")
+        if error:
+            body.append(f"<div class='refusal'>{esc(error)}</div>")
+        if not signers:
+            body.append("<div class='note'>Nobody has a passphrase yet, so this record still takes "
+                        "a typed name. At the machine that holds it, an operator enrols one with "
+                        "<code>coontie passphrase --id emp-… --set</code>.</div>")
+            body.append("<p class='context'>A passphrase is kept as a verifier, never as text: the "
+                        "ledger is printed, exported and backed up, and a readable secret on it "
+                        "would be permanent.</p>")
+            return self._page(title="Sign in", body="\n".join(body), here="/signin",
+                              operator=operator, facility=_facility_name(ws), bare=True)
+
+        options = "".join(
+            f"<option value='{esc(person.id)}'>{esc(person.full_name)}</option>"
+            for person in signers)
+        body.append(
+            "<form method='post' action='/signin'>"
+            f"<input type='hidden' name='token' value='{esc(self.token)}'>"
+            "<label for='employee'>Who is this</label>"
+            f"<select id='employee' name='employee'>{options}</select>"
+            "<label for='passphrase'>Passphrase</label>"
+            "<input type='password' id='passphrase' name='passphrase' autocomplete='current-password' "
+            "autofocus>"
+            "<button type='submit'>Sign in</button></form>")
+        body.append("<p class='context'>Five wrong passphrases from one device lock this page for "
+                    "fifteen minutes. Forgetting a passphrase is done at the server, not here: the "
+                    "record is printed and backed up, so a reset that needs no witness would be the "
+                    "wrong shape.</p>")
+        return self._page(title="Sign in", body="\n".join(body), here="/signin",
+                          operator=operator, facility=_facility_name(ws), bare=True)
 
     def render_pair(self, *, error: str = "", done: str = "") -> str:
         """The only page a device may see before it is paired. One field, and where the code came from."""
@@ -1788,7 +1872,45 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _person_cookie(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == "coontie_person":
+                return urllib.parse.unquote(value)
+        return ""
+
+    def _signin_state(self) -> tuple:
+        """(employee id, full name, whether the record requires a person) for this request."""
+        from . import people
+
+        ws = self._ws()
+        try:
+            employee_id = people.person_from_cookie(self.app.token, self._person_cookie())
+            person = ws.employee(employee_id) if employee_id else None
+            if person is not None and not person.active:
+                person = None
+            self.app.local.signed_in = person is not None
+            self.app.local.person = person.full_name if person else ""
+            required = people.any_passphrase(ws)
+            return (person.id if person else ""), (person.full_name if person else ""), required
+        finally:
+            ws.close()
+
+    def _signin_gate(self) -> tuple | None:
+        """Once anyone has a passphrase, nothing but the way in is served to a stranger."""
+        path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
+        if path in ("/signin", "/health", "/pair"):
+            return None
+        _, name, required = self._signin_state()
+        if name or not required:
+            return None
+        return (303, "", {"Location": "/signin"})
+
     def _operator(self) -> str:
+        _, name, _ = self._signin_state()
+        if name:
+            return name
         raw = self.headers.get("Cookie") or ""
         for part in raw.split(";"):
             name, _, value = part.strip().partition("=")
@@ -1822,8 +1944,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_host():
             self._send(403, "Host not allowed")
             return
+        gate = self._signin_gate()
+        if gate is not None:
+            self._send(*gate[:1], gate[1], headers=gate[2])
+            return
         path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
         operator = self._operator()
+        if path == "/signin":
+            params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
+                                                 keep_blank_values=True))
+            self._with_ws(lambda ws: self.app.render_signin(
+                ws, operator, error=params.get("error", ""),
+                tries=params.get("tries", "")))
+            return
         if path == "/health":
             self._send(200, "ok", ctype="text/plain; charset=utf-8")
             return
@@ -1952,6 +2085,10 @@ class Handler(BaseHTTPRequestHandler):
         if gate is not None:
             self._send(*gate[:1], gate[1], headers=gate[2])
             return
+        gate = self._signin_gate()
+        if gate is not None:
+            self._send(*gate[:1], gate[1], headers=gate[2])
+            return
         if not self._check_host() or not self._check_origin():
             self._send(403, "Request not allowed from here")
             return
@@ -2006,6 +2143,69 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie",
                              f"coontie_device={token}; HttpOnly; SameSite=Strict; Path=/; "
                              f"Max-Age=31536000")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        if path == "/signin":
+            from . import people
+
+            address = self.client_address[0]
+            wait = self.app.signin_limiter.retry_after(address)
+            if wait:
+                self._redirect("/signin?error=" + urllib.parse.quote(
+                    f"too many wrong passphrases from this device; try again in {wait // 60 + 1} "
+                    "minutes"))
+                return
+            employee_id = (form.get("employee") or [""])[0].strip()
+            passphrase = (form.get("passphrase") or [""])[0]
+            ws = self._ws()
+            try:
+                person = people.sign_in(ws, employee_id, passphrase)
+                ws.ledger.append("person_signed_in",
+                                 {"employee": person.id, "name": person.full_name,
+                                  "terminal": getattr(self.server, "lan", False) and "network" or
+                                  "this machine"}, datetime.now(timezone.utc))
+            except people.SignInError as exc:
+                self.app.signin_limiter.fail(address)
+                left = self.app.signin_limiter.remaining(address)
+                ws.close()
+                message = str(exc)
+                if left and "does not match" in message:
+                    message = f"{message}; {left} tries left from this device"
+                self._redirect("/signin?error=" + urllib.parse.quote(message))
+                return
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            self.app.signin_limiter.clear(address)
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie",
+                             f"coontie_person={people.person_cookie(self.app.token, person.id)}; "
+                             f"HttpOnly; SameSite=Strict; Path=/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        if path == "/signout":
+            from . import people
+
+            employee_id, name, _ = self._signin_state()
+            if employee_id:
+                ws = self._ws()
+                try:
+                    ws.ledger.append("person_signed_out", {"employee": employee_id, "name": name},
+                                     datetime.now(timezone.utc))
+                finally:
+                    ws.close()
+            self.send_response(303)
+            self.send_header("Location", "/signin")
+            self.send_header("Set-Cookie",
+                             f"{people.PERSON_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; "
+                             f"Max-Age=0")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

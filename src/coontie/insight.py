@@ -281,7 +281,9 @@ def brief(ws, *, now: datetime | None = None, days: int = 7) -> str:
     # a settings change is on the ledger for the audit trail, but it is not a facility record:
     # counting it here would report "6 records" one day and "7" after someone changed the colours
     events = count(
-        "SELECT COUNT(*) FROM events WHERE occurred_at >= ? AND event_key <> 'appearance_chosen'",
+        "SELECT COUNT(*) FROM events WHERE occurred_at >= ? AND event_key NOT IN"
+        " ('appearance_chosen', 'passphrase_set', 'passphrase_forgotten', 'person_signed_in',"
+        " 'person_signed_out')",
         (since_text,),
     )
     if events == 0:

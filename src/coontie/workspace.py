@@ -290,7 +290,13 @@ CREATE TABLE IF NOT EXISTS employees (
     hire_date     TEXT NOT NULL,
     email         TEXT NOT NULL UNIQUE,
     active        INTEGER NOT NULL DEFAULT 1,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    -- A passphrase is an attribute of the person, and it is kept the way an API user's password is:
+    -- as a PBKDF2 verifier. The ledger is printed, exported and backed up, so a readable secret on
+    -- this record would be permanent. Empty means this person has not been enrolled to sign in.
+    passphrase_verifier TEXT NOT NULL DEFAULT '',
+    passphrase_kdf      TEXT NOT NULL DEFAULT '',
+    passphrase_set_at   TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS api_users (
     id          TEXT PRIMARY KEY,
@@ -488,6 +494,15 @@ class Workspace:
 
     def _migrate(self) -> None:
         """Additive migrations only: an operator's file is never rebuilt underneath them."""
+        for column, ddl in (
+            ("passphrase_verifier", "TEXT NOT NULL DEFAULT ''"),
+            ("passphrase_kdf", "TEXT NOT NULL DEFAULT ''"),
+            ("passphrase_set_at", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            # A record written before passphrases existed must gain the column, not fail to read:
+            # CREATE TABLE IF NOT EXISTS does nothing to an existing table.
+            if column not in {r[1] for r in self.conn.execute("PRAGMA table_info(employees)")}:
+                self.conn.execute(f"ALTER TABLE employees ADD COLUMN {column} {ddl}")
         columns = {r[1] for r in self.conn.execute("PRAGMA table_info(lots)")}
         if "sts_inventory_id" not in columns:
             self.conn.execute("ALTER TABLE lots ADD COLUMN sts_inventory_id TEXT")
@@ -876,10 +891,53 @@ class Workspace:
                 id=r["id"], full_name=r["full_name"],
                 date_of_birth=date.fromisoformat(r["date_of_birth"]),
                 hire_date=date.fromisoformat(r["hire_date"]), email=r["email"],
-                active=bool(r["active"]),
+                active=bool(r["active"]), can_sign_in=bool(r["passphrase_verifier"]),
             )
             for r in self.conn.execute("SELECT * FROM employees ORDER BY full_name")
         ]
+
+    def employee(self, employee_id: str):
+        """One employee, or None. The id is the department's, so an unknown id is a refusal upstream."""
+        match = [person for person in self.employees() if person.id == employee_id]
+        return match[0] if match else None
+
+    def set_passphrase(self, employee_id: str, passphrase: str, *, actor: str,
+                       at: datetime | None = None):
+        """Give one employee a passphrase. The verifier is written; the passphrase never is."""
+        from . import people
+
+        at = _as_utc(at)
+        person = self.employee(employee_id)
+        if person is None:
+            raise ValueError(f"no employee {employee_id!r} on this record")
+        text = people.check_passphrase(passphrase, name=person.full_name)
+        _, encoded = people.derive_verifier(text)
+        self.conn.execute(
+            "UPDATE employees SET passphrase_verifier = ?, passphrase_kdf = ?, passphrase_set_at = ?"
+            " WHERE id = ?", (encoded, "pbkdf2_sha256", at.isoformat(), employee_id))
+        self.conn.commit()
+        self.ledger.append("passphrase_set", {"employee": employee_id, "name": person.full_name,
+                                              "by": actor, "kdf": "pbkdf2_sha256",
+                                              "note": "a verifier was written; the passphrase was not"},
+                           at)
+        return self.employee(employee_id)
+
+    def forget_passphrase(self, employee_id: str, *, actor: str,
+                          at: datetime | None = None):
+        """Remove the passphrase, returning this person to the claimed-name path."""
+        at = _as_utc(at)
+        person = self.employee(employee_id)
+        if person is None:
+            raise ValueError(f"no employee {employee_id!r} on this record")
+        if not person.can_sign_in:
+            raise ValueError(f"{person.full_name} has no passphrase to forget")
+        self.conn.execute(
+            "UPDATE employees SET passphrase_verifier = '', passphrase_kdf = '',"
+            " passphrase_set_at = '' WHERE id = ?", (employee_id,))
+        self.conn.commit()
+        self.ledger.append("passphrase_forgotten", {"employee": employee_id,
+                                                   "name": person.full_name, "by": actor}, at)
+        return self.employee(employee_id)
 
     def add_api_user(
         self,
@@ -3096,6 +3154,15 @@ class Workspace:
 
 
 # -- row mapping ---------------------------------------------------------------
+
+
+def _as_utc(value) -> datetime:
+    """A moment, whichever form a caller had it in. The CLI passes ISO strings, tests pass datetimes."""
+    if value is None:
+        return datetime.now(timezone.utc)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(str(value))
 
 
 def _now() -> str:

@@ -156,28 +156,8 @@ def paired_count(ws) -> int:
     return len([d for d in list_devices(ws) if d.paired])
 
 
-class Limiter:
-    """Failed pairing attempts per address, held in memory for the life of the server."""
-
-    def __init__(self, *, limit: int = MAX_ATTEMPTS, lockout: timedelta = LOCKOUT):
-        self.limit = limit
-        self.lockout = lockout
-        self.failures: dict = {}
-
-    def retry_after(self, address: str, now: datetime | None = None) -> int:
-        now = now or datetime.now(timezone.utc)
-        stamps = [stamp for stamp in self.failures.get(address, []) if now - stamp < self.lockout]
-        self.failures[address] = stamps
-        if len(stamps) < self.limit:
-            return 0
-        return max(1, int((self.lockout - (now - min(stamps))).total_seconds()))
-
-    def fail(self, address: str, now: datetime | None = None) -> None:
-        now = now or datetime.now(timezone.utc)
-        self.failures.setdefault(address, []).append(now)
-
-    def clear(self, address: str) -> None:
-        self.failures.pop(address, None)
+# The limiter is shared with operator sign-in, so it lives in its own module.
+from .attempts import MAX_ATTEMPTS, LOCKOUT, Limiter  # noqa: E402,F401
 
 
 def lan_address() -> str:

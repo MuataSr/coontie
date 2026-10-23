@@ -315,3 +315,21 @@ Added 2026-10-23 with the LAN increment (`docs/flows/lan.md`).
   honest part of this screen.
 - Five wrong codes from one address lock pairing from that address for fifteen minutes, and the page
   says how long rather than failing silently.
+
+
+## Screen 13, Sign in: who is holding it
+
+Added 2026-10-23 with the operator increment (`docs/flows/operators.md`).
+
+- Appears only when somebody on the payroll record has a passphrase. Until then every screen behaves
+  as it did, with a typed name and the sentence that the name is a claim.
+- One select listing the people who *can* sign in, one passphrase field, one button. A person without
+  a passphrase is not offered, because an option that always fails is a trap.
+- The page says what signing in does, where a passphrase comes from when nobody has one, and that
+  forgetting one is done at the server rather than on the page: a reset needing no witness is the
+  wrong shape for a controlled-substance record.
+- Five wrong passphrases lock that device for fifteen minutes; the refusal counts down rather than
+  failing silently.
+- The header shows the signed-in person's full name as text and a **Sign out** button. A name that
+  came from a signed session is not a text box, so the box is gone while signed in and the only
+  control beside the name is the way out.

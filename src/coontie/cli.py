@@ -410,6 +410,56 @@ def cmd_dispense(args) -> int:
     return 0
 
 
+def _prompt_passphrase(*, twice: bool) -> str:
+    import getpass
+
+    first = getpass.getpass("passphrase: ")
+    if twice and first != getpass.getpass("again: "):
+        sys.exit("the two entries do not match; nothing was changed")
+    return first
+
+
+def cmd_passphrase(args) -> int:
+    from . import people
+
+    ws = _ws(args)
+    try:
+        actor = getattr(args, "actor", None) or "the server operator"
+        at = _now_arg(getattr(args, "at", None))
+        person = ws.employee(args.employee_id)
+        if person is None:
+            sys.exit(f"no employee {args.employee_id!r} on this record; "
+                     "`coontie employee --name ...` records one first")
+        if args.set:
+            passphrase = args.value if args.value is not None else _prompt_passphrase(twice=True)
+            ws.set_passphrase(person.id, passphrase, actor=actor, at=at)
+            print(f"{person.full_name}: passphrase set.")
+            print()
+            print("  A verifier was written; the passphrase itself is on no record, in no backup and")
+            print("  in no export. Until somebody signs in at the appliance, every screen takes a")
+            print("  typed name and says that the name is a claim.")
+            return 0
+        if args.forget:
+            ws.forget_passphrase(person.id, actor=actor, at=at)
+            print(f"{person.full_name}: passphrase forgotten; a typed name is a claim again")
+            return 0
+        passphrase = args.value if args.value is not None else _prompt_passphrase(twice=False)
+        person = person if person.can_sign_in else ws.employee(person.id)
+        row = ws.conn.execute("SELECT passphrase_verifier FROM employees WHERE id = ?",
+                              (person.id,)).fetchone()
+        if not row["passphrase_verifier"]:
+            print(f"{person.full_name}: no passphrase is set")
+            return 1
+        ok = people.verify(passphrase, row["passphrase_verifier"])
+        print(f"{person.full_name}: {'matches' if ok else 'does not match'}")
+        return 0 if ok else 1
+    except ValueError as exc:
+        sys.exit(str(exc))
+    finally:
+        ws.close()
+    return 0
+
+
 def cmd_employee(args) -> int:
     ws = _ws(args)
     try:
@@ -1723,6 +1773,17 @@ def build_parser() -> argparse.ArgumentParser:
     emp.add_argument("--email", required=True)
     emp.add_argument("--at")
     emp.set_defaults(func=cmd_employee)
+
+    pw = _db(sub.add_parser("passphrase", help="give one employee something to sign in with"))
+    pw.add_argument("--id", required=True, dest="employee_id", help="the employee id, emp-…")
+    pw_mode = pw.add_mutually_exclusive_group(required=True)
+    pw_mode.add_argument("--set", action="store_true", help="set a new passphrase (prompted, not echoed)")
+    pw_mode.add_argument("--verify", action="store_true", help="check a passphrase; exit 0 or 1")
+    pw_mode.add_argument("--forget", action="store_true", help="remove it, back to a claimed name")
+    pw.add_argument("--value", help="the passphrase, for a scripted check; omit to be prompted")
+    pw.add_argument("--actor", help="who did this")
+    pw.add_argument("--at")
+    pw.set_defaults(func=cmd_passphrase)
 
     apiu = _db(sub.add_parser("api-user", help="record an authorized API user"))
     apiu.add_argument("--email", required=True)

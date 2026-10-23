@@ -458,8 +458,37 @@ coontie terminal revoke --id dv-471f153ab5         # its next request goes back 
 - **Traffic is unencrypted unless the facility provides a certificate.** `--tls-cert`/`--tls-key` take
   a PEM it already owns; without them the bind line says, in words, that the network is not encrypted.
   Standard library can load a certificate and cannot invent one, and inventing one would be worse.
-- **A paired terminal is not a person.** The operator name stays a claim. Per-person passphrases are a
-  separate increment, named as outstanding rather than implied. Spec: `docs/flows/lan.md`.
+- **A paired terminal is not a person by itself.** Pairing says which *device* may talk to the
+  record. Who is holding it is a second question, answered below.
+
+## Who is holding it
+
+The name beside a record was a typed string for most of this build, and every screen said so. A tablet
+in a cure room ends that arrangement: two people, one tablet, no way to tell them apart.
+
+```bash
+coontie passphrase --id emp-3f81c0 --set      # prompted twice, nothing echoed
+coontie passphrase --id emp-3f81c0 --verify   # exit 0 or 1, for a script or at the terminal
+coontie passphrase --id emp-3f81c0 --forget --actor "Maria Lopez"
+```
+
+- **Enrol nobody and nothing changes.** Every screen takes a typed name and says the name is a claim.
+  Enrol one person and `/signin` becomes the only page that answers; `/health` stays open for whatever
+  watches the process and `/pair` still works, so a tablet can be paired before anyone signs in.
+- **The gate comes from the record, not a flag.** The appliance asks who you are exactly when somebody
+  on the payroll record has a passphrase, which is a fact it can check on every request.
+- **The cookie is signed.** A person cookie is the employee id plus an HMAC under the server's own
+  in-memory session token, so a cookie naming a person the process did not sign is no sign-in at all.
+- **The passphrase is a verifier, like an API user's password.** The record keeps the PBKDF2 string,
+  never the secret; a test reads the raw database bytes to prove it. The ledger records that a
+  passphrase was set and who set it, not what it was.
+- **Signing in and out are on the ledger** as `person_signed_in` / `person_signed_out`, carrying the
+  employee id. That is what makes the name on a record checkable: Maria signed in at 09:12, and the
+  fourteen records after it carry her name.
+- **Five wrong passphrases lock that address for fifteen minutes**, and the screen counts down.
+- **Deliberately absent:** roles, passphrase expiry, email reset, second factors, and sign-in on the
+  command line. The OS login is the boundary for whoever is at the server, and this appliance has no
+  network to mail a reset link over. Spec and refusals: `docs/flows/operators.md`. Spec: `docs/flows/lan.md`.
 
 ## The outbox: what has not reached the department
 

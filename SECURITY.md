@@ -4,6 +4,28 @@ Coontie holds a facility's operational record: inventory, manifests, corrections
 dates of birth, and the API users a facility's own systems authenticate as. Treat a copy of the database
 as you would treat the record itself.
 
+## Who can reach the record
+
+Three gates, in order, and each is enforced by a test rather than by a promise:
+
+1. **The bind.** Loopback by default. `--lan` binds this machine's address and refuses to start unless
+   a terminal has been registered, so the network path cannot exist by accident.
+2. **The device.** A terminal is paired with a one-use code that expires in fifteen minutes; it holds
+   a token the record keeps only as a PBKDF2 verifier. `/pair` is the only page an unpaired terminal
+   can reach.
+3. **The person.** Once any employee has a passphrase, the appliance serves nothing but `/signin`
+   until somebody signs in with it, and the name on every record written afterwards comes from that
+   session. The cookie is an employee id plus an HMAC under the server's in-memory session token, so a
+   hand-written cookie is not a sign-in.
+
+A facility that enrols nobody keeps the older arrangement, and every screen says so in words: the
+operator name is a claim, and the OS login is the boundary.
+
+The session token minted at startup is a bearer credential for the appliance: any page in the
+operator's browser can POST to loopback, so the token (HttpOnly, SameSite=Strict), the `Origin` check
+and the signed-person cookie are the three things that stop a drive-by form. There is no CSRF token
+beyond the session token, no rate limit outside sign-in and pairing, and no audit of reads.
+
 ## Reporting a vulnerability
 
 Open a private security advisory on the repository (Security → Advisories → New draft) rather than a
