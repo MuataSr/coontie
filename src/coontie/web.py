@@ -287,8 +287,8 @@ def _human_age(delta) -> str:
     if days:
         return f"{days} d {hours} h"
     if hours:
-        return f"{hours} h {minutes} m"
-    return f"{minutes} m"
+        return f"{hours} h {minutes} min"
+    return f"{minutes} min"
 
 
 def backup_dir(ws) -> Path:
@@ -689,7 +689,8 @@ class App:
         state = transmission.backlog(ws, now=now)
         if state["waiting"]:
             overdue = state["overdue"]
-            sentence = (f"{state['waiting']} record(s) not yet sent. Oldest "
+            plural = "" if state["waiting"] == 1 else "s"
+            sentence = (f"{state['waiting']} record{plural} not yet sent. Oldest "
                         f"{_human_age(state['oldest'])}; the department's window is 12 hours.")
             tone = "refusal" if overdue else "note"
             body_note = (f"{overdue} of them are past that window. " if overdue else "")
@@ -704,6 +705,10 @@ class App:
         if state["waiting"]:
             body.append(pending_line)
         body.append(f'<p class="{"lede" if not lede else "context"}">{esc(local_time(now))}</p>')
+        if findings:
+            body.append("<p class='context'>Worst first. Inside each severity the oldest is at the "
+                        "top, because a record that has been wrong for three weeks gets worse while "
+                        "you read.</p>")
 
         groups = [(BREACH, self.say("today.breaches")), (EXPOSURE, self.say("today.exposures")),
                   (NOTE, self.say("today.notes"))]
@@ -724,13 +729,23 @@ class App:
                 if about:
                     where += f'<span class="cite">{esc(about)}</span>'
                 sentence = theme.finding_sentence(self.voice, f)
+                # a bare "24 d" in a line of citations is a number an operator has to decode; the word
+                # "open" makes it an age, and an unknown age says so rather than showing a dash
+                age = f.age_text(now)
+                age_html = (f'<span class="cite" title="how long this has been true">'
+                            f"{esc('age unknown' if age == '—' else age + ' old')}</span>")
                 body.append(
                     f'<li class="row {esc(f.severity)}">'
                     f'<div class="headline"><span class="sev {esc(f.severity)}">'
                     f"{esc(self.say('sev.' + f.severity))}</span>"
                     f"<span>{esc(sentence)}</span></div>"
-                    f'<div class="meta">{where} {cite} {link}</div></li>'
+                    f'<div class="meta">{where} {cite} {age_html} {link}</div></li>'
                 )
+            undated = sum(1 for f in rows if f.since is None)
+            if undated:
+                body.append(
+                    f"<li class='context'>{undated} of these carry no date this record can check, "
+                    "so they sort after the dated ones and show a dash rather than a guess.</li>")
             body.append("</ul>")
 
         due = self._due(ws, now)
@@ -1502,7 +1517,8 @@ class App:
         if state["waiting"]:
             overdue = state["overdue"]
             tone = "refusal" if overdue else "note"
-            line = (f"{state['waiting']} record(s) not yet sent. Oldest "
+            plural = "" if state["waiting"] == 1 else "s"
+            line = (f"{state['waiting']} record{plural} not yet sent. Oldest "
                     f"{_human_age(state['oldest'])}; the department's window is 12 hours, real time for "
                     f"dispensing and both sides of a transfer.")
             if overdue:

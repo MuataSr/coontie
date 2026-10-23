@@ -54,6 +54,26 @@ class Finding:
     subject: str = ""
     detail: str = ""
     facts: dict = field(default_factory=dict)
+    # When this became true, from the row that knows. None means the record does not know, and the
+    # screen says so with an em dash rather than inventing an age for an inspector to read.
+    since: datetime | None = None
+
+    def age(self, now: datetime) -> timedelta | None:
+        return None if self.since is None else now - self.since
+
+    def age_text(self, now: datetime) -> str:
+        age = self.age(now)
+        if age is None:
+            return "—"
+        seconds = int(age.total_seconds())
+        if seconds < 0:
+            return "—"
+        if seconds < 3600:
+            return "just now" if seconds < 60 else f"{seconds // 60} min"
+        if seconds < 86400:
+            return f"{seconds // 3600} h"
+        days, rest = divmod(seconds, 86400)
+        return f"{days} d" + (f" {rest // 3600} h" if rest >= 3600 else "")
 
     @property
     def citation(self) -> str:
@@ -107,6 +127,9 @@ def _amount(value) -> Decimal:
         return Decimal("0")
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
 def _rows(ws, sql: str, args: tuple = ()):
     return ws.conn.execute(sql, args).fetchall()
 
@@ -125,7 +148,16 @@ def inspect(ws, now: datetime | None = None) -> list[Finding]:
     findings += _stock(ws)
     findings += _drift(ws)
     findings += _locations(ws)
-    return sorted(findings, key=lambda f: (ORDER.get(f.severity, 9), f.code, f.subject))
+    # Worst first, then oldest first inside a severity: a record that has been wrong for three weeks
+    # gets worse while the operator reads. An undated finding sorts after the dated ones in its own
+    # severity, because an unknown age is not the same fact as a small one.
+    return sorted(findings, key=lambda f: (
+        ORDER.get(f.severity, 9),
+        1 if f.since is None else 0,
+        f.since or _EPOCH,
+        f.code,
+        f.subject,
+    ))
 
 
 def _ledger(ws) -> list[Finding]:
@@ -141,7 +173,8 @@ def _justifications(ws, now) -> list[Finding]:
     out: list[Finding] = []
     rows = _rows(
         ws,
-        "SELECT a.id, a.target_id, a.cause, a.before_value, a.after_value, j.id AS jid, j.deadline, j.sent_at "
+        "SELECT a.id, a.target_id, a.cause, a.before_value, a.after_value, a.created_at, "
+        "j.id AS jid, j.deadline, j.sent_at "
         "FROM amendments a LEFT JOIN justifications j ON j.amendment_id = a.id "
         "WHERE a.justification_id IS NULL OR j.id IS NULL",
     )
@@ -152,7 +185,7 @@ def _justifications(ws, now) -> list[Finding]:
             "justification_missing", BREACH,
             f"Correction {r['target_id']} ({r['before_value']} to {r['after_value']}, cause "
             f"{r['cause']}) has no written justification drafted",
-            subject=r["id"],
+            subject=r["id"], since=_dt(r["created_at"]),
         ))
     for r in _rows(ws, "SELECT * FROM justifications"):
         deadline = _dt(r["deadline"])
@@ -161,7 +194,7 @@ def _justifications(ws, now) -> list[Finding]:
             out.append(Finding(
                 "justification_unsent", BREACH,
                 f"Justification {r['id']} was due {deadline.isoformat()} and has not been sent",
-                subject=r["id"],
+                subject=r["id"], since=deadline,
             ))
         elif sent and deadline and sent > deadline:
             late = sent - deadline
@@ -169,7 +202,7 @@ def _justifications(ws, now) -> list[Finding]:
             out.append(Finding(
                 "justification_late", EXPOSURE,
                 f"Justification {r['id']} was sent {hours}h after its deadline",
-                subject=r["id"],
+                subject=r["id"], since=deadline,
             ))
     return out
 
@@ -188,7 +221,7 @@ def _outages(ws, now) -> list[Finding]:
                 out.append(Finding(
                     "disconnect_notice_missing", BREACH,
                     f"The connection has been down since {started.isoformat()} and no notice has been drafted",
-                    subject=r["id"],
+                    subject=r["id"], since=started,
                 ))
             continue
         if now - started > DISCONNECT_THRESHOLD:
@@ -198,20 +231,20 @@ def _outages(ws, now) -> list[Finding]:
                     "disconnect_notice_missing", BREACH,
                     f"Outage {r['id']} lasted {round((restored - started).total_seconds() / 3600, 2)}h "
                     "with no notice drafted",
-                    subject=r["id"],
+                    subject=r["id"], since=started,
                 ))
             elif drafted - started > DISCONNECT_NOTICE_DEADLINE:
                 out.append(Finding(
                     "disconnect_notice_late", EXPOSURE,
                     f"Outage {r['id']}: the notice was drafted after the "
                     f"{DISCONNECT_NOTICE_DEADLINE.total_seconds() / 3600:.0f}-hour deadline",
-                    subject=r["id"],
+                    subject=r["id"], since=started,
                 ))
         if not r["report_csv"]:
             out.append(Finding(
                 "outage_report_missing", EXPOSURE,
                 f"Outage {r['id']} was restored with no itemized dispensation report on file",
-                subject=r["id"],
+                subject=r["id"], since=restored,
             ))
     return out
 
@@ -223,7 +256,7 @@ def _cultivation(ws) -> list[Finding]:
             out.append(Finding(
                 "harvest_unscheduled", BREACH,
                 f"Harvest {r['id']} was taken without a schedule on file",
-                subject=r["id"],
+                subject=r["id"], since=_dt(r["harvested_at"]),
             ))
     return out
 
@@ -240,7 +273,7 @@ def _disposals(ws) -> list[Finding]:
                 "disposal_early", BREACH,
                 f"Disposal {r['id']} of {r['subject']} happened {round(waited, 1)}h after it was "
                 f"scheduled; the wait is {DISPOSAL_WAIT.total_seconds() / 3600:.0f}h",
-                subject=r["id"],
+                subject=r["id"], since=disposed,
             ))
     return out
 
@@ -260,14 +293,14 @@ def _holds_and_expiry(ws, now) -> list[Finding]:
             "expired_available", EXPOSURE,
             f"{r['unit_count']} units of {r['upid']} expired {r['expiration_date']} and still sit in "
             f"{r['room_id']}",
-            subject=r["id"],
+            subject=r["id"], since=_dt(r["expiration_date"]),
         ))
     return out
 
 
 def _transport(ws) -> list[Finding]:
     out: list[Finding] = []
-    for r in _rows(ws, "SELECT id, recipient_name, departure_at, status FROM manifests "
+    for r in _rows(ws, "SELECT id, recipient_name, departure_at, arrival_at, status FROM manifests "
                        "WHERE status = 'dispatched'"):
         out.append(Finding(
             "manifest_unreceived", EXPOSURE,
@@ -276,14 +309,15 @@ def _transport(ws) -> list[Finding]:
             subject=r["id"],
             facts={"manifest": r["id"], "recipient": r["recipient_name"],
                    "departed": str(r["departure_at"])},
+            since=_dt(r["departure_at"]),
         ))
-    for r in _rows(ws, "SELECT id, recipient_name FROM manifests WHERE status = 'received' "
-                       "AND invoice_id = ''"):
+    for r in _rows(ws, "SELECT id, recipient_name, departure_at, arrival_at FROM manifests "
+                       "WHERE status = 'received' AND invoice_id = ''"):
         out.append(Finding(
             "manifest_no_invoice", NOTE,
             f"Manifest {r['id']} to {r['recipient_name']} was received with no wholesale invoice "
             "recorded; fine unless it was a sale",
-            subject=r["id"],
+            subject=r["id"], since=_dt(r["arrival_at"]) or _dt(r["departure_at"]),
         ))
     return out
 
@@ -301,7 +335,7 @@ def _stock(ws) -> list[Finding]:
             out.append(Finding(
                 "stock_negative", BREACH,
                 f"Lot {lot_id} has given up {-left} {lot['unit']} more than it held",
-                subject=lot_id,
+                subject=lot_id, since=_dt(lot["created_at"]),
             ))
         wrong_units = {m["unit"] for m in moves.get(lot_id, []) if m["unit"] and m["unit"] != lot["unit"]}
         if wrong_units:
@@ -309,14 +343,14 @@ def _stock(ws) -> list[Finding]:
                 "stock_unit_mismatch", EXPOSURE,
                 f"Lot {lot_id} is in {lot['unit']} but has moves recorded in "
                 f"{', '.join(sorted(wrong_units))}; the balance cannot be trusted",
-                subject=lot_id,
+                subject=lot_id, since=_dt(lot["created_at"]),
             ))
         if not lot["harvest_ids"] or lot["harvest_ids"] in ("[]", ""):
             if not lot["source_lot_id"]:
                 out.append(Finding(
                     "stock_no_origin", NOTE,
                     f"Lot {lot_id} names no harvest and no parent lot; provenance stops here",
-                    subject=lot_id,
+                    subject=lot_id, since=_dt(lot["created_at"]),
                 ))
     return out
 
@@ -361,6 +395,7 @@ def _drift(ws) -> list[Finding]:
             subject=r["id"],
             facts={"kind": r["kind"], "record_key": r["record_key"],
                    "ours": ours, "theirs": theirs},
+            since=latest["as_of"],
         ))
     return out
 

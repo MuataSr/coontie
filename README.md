@@ -490,6 +490,14 @@ coontie passphrase --id emp-3f81c0 --forget --actor "Maria Lopez"
   command line. The OS login is the boundary for whoever is at the server, and this appliance has no
   network to mail a reset link over. Spec and refusals: `docs/flows/operators.md`. Spec: `docs/flows/lan.md`.
 
+## The screen that changes the product
+
+Today is a compliance queue, not a dashboard. Breaches come first with the rule that makes them
+breaches, then exposures, then what is merely due. **Inside a severity the oldest record leads**, and
+every row says how long it has been true, because a lot that has been wrong for three weeks is worse
+today than it was last week. Where the record kept no date the row says `age unknown` rather than
+guessing. Spec: `docs/flows/today-ordering.md`.
+
 ## The outbox: what has not reached the department
 
 DH5059 gives 28 event types a twelve-hour window and 5 a real-time one. Coontie has no department

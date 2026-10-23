@@ -92,6 +92,14 @@ officer. It answers one question, in this order:
 Empty state: *"Nothing is open. `coontie audit` lists what this can and cannot check."* with a link
 to Audit, because a clean Today must not imply more certainty than the record has.
 
+**The order, added 2026-10-23.** Worst first, then the oldest inside each severity, because on a queue
+of wrong records the one that has been wrong longest is the one getting worse while the operator reads.
+Each row says how long it has been true (`24 d old`), or `age unknown` where the record kept no date
+(a hold carries no held-at stamp; a ledger break is discovered, not dated). Undated findings sort after
+the dated ones in their own severity, and one line under the group says how many there are, so the order
+is explained rather than looking arbitrary. There is no sort control: a queue that can be re-sorted is
+a queue an operator can hide work in. Spec: `docs/flows/today-ordering.md`.
+
 Links from a finding carry the exact command it would run into the destination screen's form, so
 fixing a missing justification starts from the correction it belongs to rather than from a blank
 form.
