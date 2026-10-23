@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS lots (
     quantity      TEXT NOT NULL,
     unit          TEXT NOT NULL,
     on_hold       INTEGER NOT NULL DEFAULT 0,
+    -- When the hold was applied, so a held lot can be aged like every other finding. Empty means the
+    -- record does not know, which is true of anything held before this column existed.
+    held_at       TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS import_batches (
@@ -494,6 +497,10 @@ class Workspace:
 
     def _migrate(self) -> None:
         """Additive migrations only: an operator's file is never rebuilt underneath them."""
+        if "held_at" not in {r[1] for r in self.conn.execute("PRAGMA table_info(lots)")}:
+            # A held lot from before this column keeps '' rather than inheriting its created_at: a
+            # backfilled date would be a guess sitting where an inspector reads an age.
+            self.conn.execute("ALTER TABLE lots ADD COLUMN held_at TEXT NOT NULL DEFAULT ''")
         for column, ddl in (
             ("passphrase_verifier", "TEXT NOT NULL DEFAULT ''"),
             ("passphrase_kdf", "TEXT NOT NULL DEFAULT ''"),
@@ -624,8 +631,10 @@ class Workspace:
 
     def add_lot(self, lot: Lot) -> Lot:
         self.conn.execute(
-            "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,created_at) VALUES (?,?,?,?,?,?,?)",
-            (lot.id, lot.product_id, lot.room_id, _dec(lot.quantity), lot.unit, int(lot.on_hold), _now()),
+            "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,held_at,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (lot.id, lot.product_id, lot.room_id, _dec(lot.quantity), lot.unit, int(lot.on_hold),
+             _now() if lot.on_hold else "", _now()),
         )
         self.conn.commit()
         self.ledger.append(
@@ -685,7 +694,8 @@ class Workspace:
             field, before, after = "on_hold", str(int(row["on_hold"])), str(int(bool(new_on_hold)))
             if before == after:
                 raise ValueError("hold state is already what was asked for")
-            self.conn.execute("UPDATE lots SET on_hold = ? WHERE id = ?", (after, lot_id))
+            self.conn.execute("UPDATE lots SET on_hold = ?, held_at = ? WHERE id = ?",
+                              (after, when.isoformat() if after == "1" else "", lot_id))
         self.conn.commit()
 
         amendment = Amendment(
@@ -1698,10 +1708,13 @@ class Workspace:
                 raise ValueError(f"no room matches {theirs.get('room')!r}; give --room")
             lot_id = f"lot-{uuid.uuid4().hex[:10]}"
             self.conn.execute(
-                "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,sts_inventory_id,created_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO lots (id,product_id,room_id,quantity,unit,on_hold,held_at,"
+                "sts_inventory_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                # the export carries a status, not a history, so the date is when this record learned
+                # of the hold rather than when the facility applied it
                 (lot_id, target_product["id"], target_room.id, str(count), base_unit,
-                 int(theirs.get("status") == "on_hold"), key, _now()),
+                 int(theirs.get("status") == "on_hold"),
+                 _now() if theirs.get("status") == "on_hold" else "", key, _now()),
             )
             self.conn.commit()
             self.ledger.append(

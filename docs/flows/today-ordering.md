@@ -83,3 +83,29 @@ holds, not with sorting.
    the sentence about undated work.
 8. A seeded record with a three-week-old unreceived manifest and a hold from this morning shows the
    manifest first inside its severity.
+
+
+## The hold's own date, added after the ordering shipped
+
+`today-ordering` recorded one gap plainly: a hold carried no `held_at`, so a held lot showed `age unknown`
+while every other finding could be aged. That was a hole in the record, not a fact about it, and it is
+now closed.
+
+- `lots` gains `held_at TEXT NOT NULL DEFAULT ''`, added by `ALTER TABLE` for records written before it
+  (the same silence `CREATE TABLE IF NOT EXISTS` would have produced is why the migration inspects
+  `PRAGMA table_info`).
+- **Three writers set it**, because three writers can put a lot on hold: `add_lot` when it is created on
+  hold, the incumbent import when the export says `on_hold`, and `amend_lot` when somebody holds or
+  releases it. Release writes the empty string, so a released lot is not a lot with a stale date.
+- **The import's date is when this record learned of the hold**, not when the facility applied it: the
+  vendor export carries a status, not a history. That is said here rather than implied by the value.
+- **A record that was already holding something keeps `''`.** Backfilling `held_at` from `created_at`
+  would put a number where the record has none, and the age column is what an inspector reads. Those
+  rows keep showing `age unknown` until the hold is released and re-applied, which is the truth.
+- `inspect()` reads `held_at` for `hold_unresolved`, so the finding moves out of the undated group and
+  into age order as soon as a facility holds anything under this build.
+
+What its gate asserts (`tests/test_hold_age.py`): holding a lot writes the date and ages the finding;
+releasing clears it and removes the finding; a lot created on hold is dated at creation; the import path
+dates its holds; a record written before the column existed gains it and keeps its held lot undated
+rather than inheriting a guess.

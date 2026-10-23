@@ -280,11 +280,11 @@ def _disposals(ws) -> list[Finding]:
 
 def _holds_and_expiry(ws, now) -> list[Finding]:
     out: list[Finding] = []
-    for r in _rows(ws, "SELECT id, product_id, quantity, unit FROM lots WHERE on_hold = 1"):
+    for r in _rows(ws, "SELECT id, product_id, quantity, unit, held_at FROM lots WHERE on_hold = 1"):
         out.append(Finding(
             "hold_unresolved", EXPOSURE,
             f"Lot {r['id']} of {r['quantity']} {r['unit']} is still on hold",
-            subject=r["id"],
+            subject=r["id"], since=_dt(r["held_at"]),
         ))
     today = now.date().isoformat()
     for r in _rows(ws, "SELECT id, upid, unit_count, expiration_date, room_id FROM final_products "
