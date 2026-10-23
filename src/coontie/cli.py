@@ -1815,13 +1815,15 @@ def build_parser() -> argparse.ArgumentParser:
     # `device` already means a DH5059 delivery device, so a paired tablet is a terminal
     term = _db(sub.add_parser("terminal", help="pair a tablet or a second workstation on the LAN"))
     term_sub = term.add_subparsers(dest="terminal_command", required=True)
-    term_add = term_sub.add_parser("add", help="mint a pairing code for one terminal")
+    # --db works on either side of every subcommand, including these second-level verbs; the guide
+    # tells an operator to type `terminal add --db ws.sqlite3 --name ...`, so it must parse
+    term_add = _db(term_sub.add_parser("add", help="mint a pairing code for one terminal"))
     term_add.add_argument("--name", required=True, help="what it is, e.g. 'cure room tablet'")
     term_add.add_argument("--actor", help="who is pairing it")
     term_add.set_defaults(func=cmd_terminal)
-    term_list = term_sub.add_parser("list", help="what is paired, and when each was last seen")
+    term_list = _db(term_sub.add_parser("list", help="what is paired, and when each was last seen"))
     term_list.set_defaults(func=cmd_terminal)
-    term_rev = term_sub.add_parser("revoke", help="stop a terminal from reading this record")
+    term_rev = _db(term_sub.add_parser("revoke", help="stop a terminal from reading this record"))
     term_rev.add_argument("--id", required=True, dest="terminal_id")
     term_rev.add_argument("--actor", help="who is revoking it")
     term_rev.set_defaults(func=cmd_terminal)

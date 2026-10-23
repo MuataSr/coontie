@@ -573,6 +573,15 @@ Restoring is deliberately a command and not a button: it overwrites a record, so
 `--from` and `--db`. Setup can *make* a backup and lists the last five with their verification state.
 The one-page operator guide is `docs/guides/backups.md`; the contract is `docs/flows/backup.md`.
 
+## The first week
+
+`docs/guides/first-week.md` walks a new facility through seven days, one job a day: the record and the
+rooms, the integration plan that authorizes cultivation at all, the DH5058 catalogue, the first batch and
+plants, the first harvest and cure, the first delivery, and the Friday review. Every command in it is
+read by `tests/test_first_week_guide.py` against the real command line, and the week itself is walked
+against a scratch record with the same verbs and flags. A flag renamed in the code fails that test before
+the page can mislead an operator.
+
 ## One program, three looks, four voices
 
 The record is one program with one skeleton. An operator can install a look and a voice, and a third
