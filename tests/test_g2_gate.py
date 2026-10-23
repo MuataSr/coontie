@@ -79,6 +79,8 @@ class Appliance:
                         return
             except (urllib.error.URLError, ConnectionError, TimeoutError):
                 time.sleep(0.2)
+        # the handle exists from Popen onward, so a start that never answers must not orphan the child
+        self.stop()
         raise RuntimeError("server did not start")
 
     def get(self, path: str) -> tuple[int, str]:
@@ -109,6 +111,9 @@ class Appliance:
             return e.code, e.read().decode()
 
     def stop(self) -> None:
+        # idempotent: addCleanup and tearDown may both reach here for one server
+        if self.proc.poll() is not None:
+            return
         self.proc.terminate()
         try:
             self.proc.wait(timeout=10)
@@ -136,6 +141,9 @@ class TestG2(unittest.TestCase):
         self.db = Path(self.tmp.name) / "ws.sqlite3"
         self.ids = seed(self.db)
         self.app = Appliance(self.db)
+        # registered here, not only in tearDown: unittest skips tearDown when setUp raises,
+        # which is how 25 orphaned servers accumulated before this line existed
+        self.addCleanup(self.app.stop)
 
     def tearDown(self):
         self.app.stop()

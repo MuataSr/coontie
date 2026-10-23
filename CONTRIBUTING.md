@@ -36,6 +36,14 @@ believe is not yours.
    only confirmed values. The default install carries no model and no API dependency, and that is not
    a limitation to fix.
 
+One rule about tests rather than the product: **a test that starts a server registers its cleanup where
+it acquires it.** `server = Appliance(db)` is followed on the next line by `self.addCleanup(server.stop)`,
+never only by a `tearDown`, because unittest does not call `tearDown` when `setUp` raises and a handle
+created before the failure is then unreachable. That is not theoretical: twenty-five `coontie serve`
+processes from failing runs were found alive on a build machine, holding 1.1 GB between them.
+`tests/test_harness_cleanup.py` holds the proof, including a control that shows the same setup leaks
+without the line.
+
 ## What a good pull request looks like
 
 - **One increment, one commit series.** Commit at every completed step, so a broken step can be
