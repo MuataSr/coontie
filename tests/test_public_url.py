@@ -138,6 +138,50 @@ class TestTheRefusalSaysWhichAddress(unittest.TestCase):
         self.assertIn("proxy.example.com", body)
 
 
+class TestAnOpaqueOrigin(unittest.TestCase):
+    """A phone's in-app browser posts `Origin: null`; a hostile sandboxed frame posts the same thing.
+
+    They cannot be told apart by the header, so the header stops being the gate and the session token
+    is: it is unreadable cross-origin and the cookie is SameSite=Strict.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "ws.sqlite3"
+        ws = Workspace(self.db)
+        ws.add_facility(Facility(id="f1", name="Sand Pine Cultivation, LLC",
+                                 license_number="MMTC-2026-0031", street="1 Grove Road",
+                                 city="Brooksville", state="FL", zip="34601"))
+        ws.close()
+        self.server = Server(self.db, public_url=TUNNEL)
+        self.app = self.server.httpd.RequestHandlerClass.app
+
+    def tearDown(self):
+        self.server.close()
+        self.tmp.cleanup()
+
+    def test_a_null_origin_with_the_token_is_accepted(self):
+        status, body = self.server.request(
+            "/operator", host="kind-pine-1234.trycloudflare.com", origin="null",
+            cookie=f"coontie_session={self.app.token}",
+            body=f"token={self.app.token}&operator=Muata+Kamdibe")
+        self.assertIn(status, (200, 303), body[:300])
+
+    def test_a_null_origin_without_the_token_is_still_refused(self):
+        status, body = self.server.request(
+            "/operator", host="kind-pine-1234.trycloudflare.com", origin="null",
+            cookie=f"coontie_session={self.app.token}", body="operator=Someone")
+        self.assertIn(status, (403, 400), body[:300])
+        self.assertNotIn("operator saved", body.lower())
+
+    def test_a_foreign_origin_with_the_token_is_refused(self):
+        status, _ = self.server.request(
+            "/operator", host="kind-pine-1234.trycloudflare.com", origin="https://evil.example",
+            cookie=f"coontie_session={self.app.token}",
+            body=f"token={self.app.token}&operator=Someone")
+        self.assertEqual(status, 403, "a real cross-site origin must stay refused")
+
+
 class TestTheAddressIsCheckedNotTrusted(unittest.TestCase):
     def test_a_url_with_a_scheme_and_host_normalises(self):
         self.assertEqual(web.normalise_public_url("https://X.TryCloudflare.com/"), "https://x.trycloudflare.com")

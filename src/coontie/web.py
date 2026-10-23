@@ -1841,6 +1841,13 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if origin is None:
             return True  # same-origin form posts from older browsers; the token still applies
+        if origin.strip().lower() == "null":
+            # an opaque origin: a page inside a sandboxed frame, which is how a phone's in-app browser
+            # (Telegram, and others) hands a link to a WebView. It carries no origin claim at all, so it
+            # is treated exactly like a missing header and the session token decides. The token is the
+            # real gate: it is unreadable cross-origin and the cookie is SameSite=Strict, so a hostile
+            # sandboxed frame arrives with no token and is refused a few lines later.
+            return True
         origin = origin.strip().lower()
         host, port = self.server.server_address[0], self.server.server_address[1]
         scheme = "https" if getattr(self.server, "tls", False) else "http"
