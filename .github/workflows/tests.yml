@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: the record's own suite, no dependencies to install
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests
+      - name: the publish gate's fast checks
+        env:
+          PYTHONPATH: src
+        run: python scripts/publish_check.py --skip-tests

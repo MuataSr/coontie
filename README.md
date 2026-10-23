@@ -43,7 +43,7 @@ it says "handed over", never "delivered".
 ## Run it in three minutes
 
 ```bash
-git clone <this repo> && cd coontie
+git clone https://github.com/MuataSr/coontie && cd coontie
 python3 scripts/soak.py --db demo.sqlite3 --days 30 --seed 7 --keep   # a month of one facility
 python3 -m coontie.cli --db demo.sqlite3 serve                        # http://127.0.0.1:8080
 ```

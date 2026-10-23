@@ -35,3 +35,14 @@ description of a rule.
   dispensing is unverified. Rule 64-4.222(2)(a) assumes the MMTC can check MMUR
   status and limits; how software performs that check is not documented publicly.
   Do not promise a dispensing module before this is answered.
+
+## Where this code lives
+
+Repository: `https://github.com/MuataSr/coontie` (public, MIT). First public tag `v0.0.1`, cut on
+2026-10-22. The research in this file describes that revision; a reader comparing a later revision
+should diff against the tag rather than assume the rules have not moved.
+
+Two name checks are recorded, with the URLs and what each fetch returned, in
+`docs/FTO-2026-10-22.md`. Florida's corporate registry (Sunbiz) sits behind a Cloudflare challenge and
+could not be read from the machine that published this repository, so that check is outstanding and is
+named as outstanding rather than assumed.
