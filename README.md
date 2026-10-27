@@ -3,7 +3,7 @@
 An open, MIT-licensed core for a Florida medical marijuana treatment center's
 **internal seed-to-sale system** (the "Internal STS Tracking System" in Rule
 64-4.221, F.A.C.). Python standard library only. No database server, no cloud account,
-no per-seat licence, nothing to phone home.
+no per-seat license, nothing to phone home.
 
 ![Today](docs/screens/today.png)
 
@@ -18,7 +18,7 @@ Coontie is the same job in one SQLite file and one local web page:
 
 - **The record is hash-chained and printed.** `coontie verify` recomputes every link; the
   audit prints the chain head, the counts and a signature line that survives a printer
-  without colour.
+  without color.
 - **Corrections are first class.** A wrong weight takes a command and a cause, not a
   support ticket, and the twelve-hour written notice drafts itself.
 - **Differences with the state are shown, never hidden.** Paste the department's export,
@@ -77,7 +77,7 @@ Source: Florida Museum of Natural History, "A Butterfly on the Move: The Atala
 Butterfly and Its Coontie Connection" (see `docs/sources.md`).
 
 
-Free and open source, no per-seat licence, no vendor lock-in. The point is that an
+Free and open source, no per-seat license, no vendor lock-in. The point is that an
 operator can read the code that reports their grams to the state.
 
 **Status: the record layer is complete through a facility's ordinary day; the appliance
@@ -150,7 +150,7 @@ The import is forgiving about column names (`Item Name`, `Product Name` and
 `THC (mg)`, `Tetrahydrocannabinol (THC) Weight` both land correctly), strict about
 values (a bad product type is reported with the form's own options), and idempotent
 (re-importing reuses products by unique product ID instead of duplicating the
-catalogue). Rows that fail are skipped and listed; nothing aborts the batch.
+catalog). Rows that fail are skipped and listed; nothing aborts the batch.
 
 ## Correct a record without losing it
 
@@ -242,7 +242,7 @@ state's".
 
 Quantities are normalised before comparison, so 60 g and 2.117 oz are **not** a difference;
 the rule's conversion is applied in one place (`compliance.ounces_to_grams`). An
-unrecognised status in the state's export is passed through rather than matched to the
+unrecognized status in the state's export is passed through rather than matched to the
 nearest thing, so it surfaces as a difference instead of hiding.
 
 ## Cultivation, seed to harvest
@@ -305,12 +305,12 @@ Two rules are absolute here:
   command that changes one. A second record for the same product and packaging date with a
   different expiration is refused with that word in the message.
 
-A final product must carry a unique product ID that already exists in the DH5058 catalogue,
-so the catalogue S1 builds is what production actually uses.
+A final product must carry a unique product ID that already exists in the DH5058 catalog,
+so the catalog S1 builds is what production actually uses.
 
 ## People, moves and destruction
 
-The catalogue's admin and disposal events, and the two that move material around a facility:
+The catalog's admin and disposal events, and the two that move material around a facility:
 
 ```bash
 coontie employee --name "Maria Lopez" --dob 1990-04-02 --hire-date 2026-01-05 --email maria@example.com
@@ -323,7 +323,7 @@ coontie dispose --lot lot-2417458961          # refused inside the 72-hour wait
 An API user's password **never reaches the ledger**. The form derives PBKDF2-HMAC-SHA256 and the
 event carries `password_verifier`; the plaintext exists for the length of the request and is gone.
 A hash-chained, append-only file is printed, backed up and exported, and a secret written into it
-can never be taken out again. That is a deliberate deviation from the catalogue's field list, it is
+can never be taken out again. That is a deliberate deviation from the catalog's field list, it is
 named in `docs/flows/facility-records.md`, and a test asserts the plaintext is absent from the
 database file, not merely from the page.
 
@@ -463,7 +463,7 @@ coontie terminal revoke --id dv-471f153ab5         # its next request goes back 
 
 ## A tunnel, when someone has to look from outside
 
-The appliance refuses a request whose `Host` it does not recognise, which is what keeps a page in the
+The appliance refuses a request whose `Host` it does not recognize, which is what keeps a page in the
 operator's browser from writing to the record. A tunnel puts a stranger's hostname on every request, so
 serving one means naming that address out loud:
 
@@ -560,7 +560,7 @@ Thirty simulated days of one facility through the real CLI: batches, harvests, c
 conversions, lab samples, final products, manifests and receipts, corrections with their notices, a
 disposal after its waiting period, drift reconciliations, and one disconnection. It then checks what a
 stage test cannot: the chain verifies **every day**, no lot goes negative, weight is conserved, every
-non-exempt correction has its notice, every catalogue event carries the fields DH5059 requires, and the
+non-exempt correction has its notice, every catalog event carries the fields DH5059 requires, and the
 same seed reproduces the same month.
 
 It refuses to write into a path that already holds a record, and `--keep` leaves the month behind as a
@@ -596,7 +596,7 @@ The one-page operator guide is `docs/guides/backups.md`; the contract is `docs/f
 ## The first week
 
 `docs/guides/first-week.md` walks a new facility through seven days, one job a day: the record and the
-rooms, the integration plan that authorizes cultivation at all, the DH5058 catalogue, the first batch and
+rooms, the integration plan that authorizes cultivation at all, the DH5058 catalog, the first batch and
 plants, the first harvest and cure, the first delivery, and the Friday review. Every command in it is
 read by `tests/test_first_week_guide.py` against the real command line, and the week itself is walked
 against a scratch record with the same verbs and flags. A flag renamed in the code fails that test before
@@ -627,7 +627,7 @@ words and one black-on-white layout whichever skin is installed. If a theme coul
 10 pt grey, the theme would have damaged an inspection.
 
 The choice goes on the ledger as `appearance_chosen` with who made it, and it is deliberately not
-counted in "records written this week": changing the colours is not a facility record. The whole
+counted in "records written this week": changing the colors is not a facility record. The whole
 contract, including what the checker refuses, is in `docs/flows/themes.md`.
 
 ## Develop
@@ -677,5 +677,5 @@ code that enforces it.
 
 - MIT. No copyleft obligation imported from another project's adapter.
 - No incumbent's code or private API is read or copied. Public documents, public
-  repositories read under their own licences, and the operator's own data only.
+  repositories read under their own licenses, and the operator's own data only.
 - Support, if wanted, is a service someone can sell. The code stays free.
